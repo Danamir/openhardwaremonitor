@@ -26,11 +26,14 @@ namespace OpenHardwareMonitor.GUI {
     private readonly PersistentSettings settings;
     private readonly UnitManager unitManager;
 
+    // gap between stacked panels, in pixels
+    private const double StackGap = 4;
+
     private readonly PlotView plot;
-    private readonly PlotModel model;
-    private readonly TimeSpanAxis timeAxis = new TimeSpanAxis();
-    private readonly SortedDictionary<SensorType, LinearAxis> axes =
-      new SortedDictionary<SensorType, LinearAxis>();
+    private readonly StackedPlotModel model;
+    private readonly ViewTimeSpanAxis timeAxis = new ViewTimeSpanAxis();
+    private readonly SortedDictionary<SensorType, ViewLinearAxis> axes =
+      new SortedDictionary<SensorType, ViewLinearAxis>();
 
     private UserOption stackedAxes;
     private UserOption axisLabels;
@@ -59,12 +62,14 @@ namespace OpenHardwareMonitor.GUI {
     }
 
     public void SetCurrentSettings() {
-      settings.SetValue("plotPanel.MinTimeSpan", (float)timeAxis.Minimum);
-      settings.SetValue("plotPanel.MaxTimeSpan", (float)timeAxis.Maximum);
+      // not "plotPanel.Min/MaxTimeSpan": these keys belong to the value axis
+      // of SensorType.TimeSpan below
+      settings.SetValue("plotPanel.MinTimeWindow", (float)timeAxis.ZoomMinimum);
+      settings.SetValue("plotPanel.MaxTimeWindow", (float)timeAxis.ZoomMaximum);
 
       foreach (var axis in axes.Values) {
-        settings.SetValue("plotPanel.Min" + axis.Key, (float)axis.Minimum);
-        settings.SetValue("plotPanel.Max" + axis.Key, (float)axis.Maximum);
+        settings.SetValue("plotPanel.Min" + axis.Key, (float)axis.ZoomMinimum);
+        settings.SetValue("plotPanel.Max" + axis.Key, (float)axis.ZoomMaximum);
       }
     }
 
@@ -124,7 +129,7 @@ namespace OpenHardwareMonitor.GUI {
       return menu;
     }
 
-    private PlotModel CreatePlotModel() {
+    private StackedPlotModel CreatePlotModel() {
 
       timeAxis.Position = AxisPosition.Bottom;
       timeAxis.MajorGridlineStyle = LineStyle.Solid;
@@ -141,8 +146,8 @@ namespace OpenHardwareMonitor.GUI {
       timeAxis.Minimum = 0;
       timeAxis.AbsoluteMaximum = 24 * 60 * 60;
       timeAxis.Zoom(
-        settings.GetValue("plotPanel.MinTimeSpan", 0.0f),
-        settings.GetValue("plotPanel.MaxTimeSpan", 10.0f * 60));
+        settings.GetValue("plotPanel.MinTimeWindow", 0.0f),
+        settings.GetValue("plotPanel.MaxTimeWindow", 10.0f * 60));
       timeAxis.StringFormat = "h:mm";
 
       var units = new Dictionary<SensorType, string>();
@@ -159,7 +164,7 @@ namespace OpenHardwareMonitor.GUI {
       units.Add(SensorType.Data, "GB");
 
       foreach (SensorType type in Enum.GetValues(typeof(SensorType))) {
-        var axis = new LinearAxis();
+        var axis = new ViewLinearAxis();
         axis.Position = AxisPosition.Left;
         axis.MajorGridlineStyle = LineStyle.Solid;
         axis.MajorGridlineThickness = 1;
@@ -180,7 +185,7 @@ namespace OpenHardwareMonitor.GUI {
         axes.Add(type, axis);
       }
 
-      var model = new PlotModel();
+      var model = new StackedPlotModel(LayoutStackedAxes, StackGap);
       model.Axes.Add(timeAxis);
       foreach (var axis in axes.Values)
         model.Axes.Add(axis);
@@ -228,21 +233,20 @@ namespace OpenHardwareMonitor.GUI {
     }
 
     private void UpdateAxesPosition() {
+      model.IsStacked = stackedAxes.Value;
       if (stackedAxes.Value) {
-        var count = axes.Values.Count(axis => axis.IsAxisVisible);
-        var start = 0.0;
-        foreach (var pair in axes.Reverse()) {
-          var axis = pair.Value;
-          var type = pair.Key;
-          axis.StartPosition = start;
-          var delta = axis.IsAxisVisible ? 1.0 / count : 0;
-          start += delta;
-          axis.EndPosition = start;
+        // the panel frames drawn by StackedPlotModel replace the axis
+        // lines and the plot area border
+        model.PlotAreaBorderThickness = new OxyThickness(0);
+        foreach (var axis in axes.Values) {
           axis.PositionTier = 0;
+          axis.AxislineStyle = LineStyle.None;
           axis.MajorGridlineStyle = LineStyle.Solid;
-          axis.MinorGridlineStyle = LineStyle.Solid;   
+          axis.MinorGridlineStyle = LineStyle.Solid;
         }
+        LayoutStackedAxes(0);
       } else {
+        model.PlotAreaBorderThickness = new OxyThickness(1);
         var tier = 0;
         foreach (var pair in axes.Reverse()) {
           var axis = pair.Value;
@@ -257,11 +261,31 @@ namespace OpenHardwareMonitor.GUI {
             axis.EndPosition = 0;
             axis.PositionTier = 0;
           }
+          axis.AxislineStyle = LineStyle.Solid;
           axis.MajorGridlineStyle = LineStyle.None;
-          axis.MinorGridlineStyle = LineStyle.None;          
+          axis.MinorGridlineStyle = LineStyle.None;
         }
       }
 
+    }
+
+    // Splits the plot area height between the visible axes, leaving a gap
+    // (as a fraction of the plot area height) between consecutive panels.
+    private void LayoutStackedAxes(double gap) {
+      var count = axes.Values.Count(axis => axis.IsAxisVisible);
+      if (count == 0)
+        return;
+      var height = Math.Max(0, (1.0 - gap * (count - 1)) / count);
+      var start = 0.0;
+      foreach (var axis in axes.Reverse().Select(pair => pair.Value)) {
+        axis.StartPosition = start;
+        if (axis.IsAxisVisible) {
+          axis.EndPosition = Math.Min(1, start + height);
+          start = Math.Min(1, axis.EndPosition + gap);
+        } else {
+          axis.EndPosition = start;
+        }
+      }
     }
 
     public void InvalidatePlot() {
@@ -276,6 +300,98 @@ namespace OpenHardwareMonitor.GUI {
       }
 
       this.plot.InvalidatePlot(true);
+    }
+
+    // OxyPlot 2 keeps the range set by Zoom() (time window menu, mouse zoom
+    // and pan) in the protected ViewMinimum/ViewMaximum, not in Minimum and
+    // Maximum. These axes expose it so it can be saved; NaN means automatic.
+    private class ViewTimeSpanAxis : TimeSpanAxis {
+      public double ZoomMinimum { get { return ViewMinimum; } }
+      public double ZoomMaximum { get { return ViewMaximum; } }
+    }
+
+    private class ViewLinearAxis : LinearAxis {
+      public double ZoomMinimum { get { return ViewMinimum; } }
+      public double ZoomMaximum { get { return ViewMaximum; } }
+    }
+
+    // All panels share one plot area: each value axis only covers a slice of
+    // it. In stacked mode this model separates the slices with white gaps and
+    // frames each of them.
+    private class StackedPlotModel : PlotModel {
+
+      private readonly Action<double> layoutAxes;
+      private readonly double gapSize;
+
+      public StackedPlotModel(Action<double> layoutAxes, double gapSize) {
+        this.layoutAxes = layoutAxes;
+        this.gapSize = gapSize;
+      }
+
+      public bool IsStacked { get; set; }
+
+      protected override void RenderOverride(IRenderContext rc, double width,
+        double height) {
+        if (IsStacked) {
+          // the plot area of the previous render is a good estimate of the
+          // current one, as it only depends on the size and the margins
+          var plotHeight = PlotArea.Height > 0 ? PlotArea.Height : height;
+          layoutAxes(gapSize / plotHeight);
+        }
+
+        base.RenderOverride(rc, width, height);
+
+        if (IsStacked)
+          RenderPanels(rc);
+      }
+
+      private void RenderPanels(IRenderContext rc) {
+        var area = PlotArea;
+        var left = Math.Round(area.Left);
+        var right = Math.Round(area.Right);
+
+        var panels = Axes
+          .Where(axis => axis.IsAxisVisible &&
+            axis.Position == AxisPosition.Left &&
+            axis.EndPosition > axis.StartPosition)
+          .Select(axis => new {
+            Top = Math.Round(Math.Min(axis.ScreenMin.Y, axis.ScreenMax.Y)),
+            Bottom = Math.Round(Math.Max(axis.ScreenMin.Y, axis.ScreenMax.Y))
+          })
+          .OrderBy(panel => panel.Top)
+          .ToList();
+        if (panels.Count == 0)
+          return;
+
+        rc.ResetClip();
+
+        // blank out everything between the panels (time axis gridlines)
+        var gapTop = Math.Round(area.Top);
+        foreach (var panel in panels) {
+          if (panel.Top > gapTop)
+            rc.FillRectangle(
+              new OxyRect(left, gapTop, right - left, panel.Top - gapTop),
+              OxyColors.White);
+          gapTop = Math.Max(gapTop, panel.Bottom);
+        }
+        var bottom = Math.Round(area.Bottom);
+        if (bottom > gapTop)
+          rc.FillRectangle(new OxyRect(left, gapTop, right - left,
+            bottom - gapTop), OxyColors.White);
+
+        // 1px frames, on pixel centers so they stay sharp
+        foreach (var panel in panels) {
+          var x0 = left + 0.5;
+          var x1 = right - 0.5;
+          var y0 = panel.Top + 0.5;
+          var y1 = panel.Bottom - 0.5;
+          rc.DrawLine(new[] {
+              new ScreenPoint(x0, y0), new ScreenPoint(x1, y0),
+              new ScreenPoint(x1, y1), new ScreenPoint(x0, y1),
+              new ScreenPoint(x0, y0) },
+            OxyColors.Black, 1, null, LineJoin.Miter, true);
+        }
+      }
     }
 
   }
