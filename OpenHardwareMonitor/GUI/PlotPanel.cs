@@ -11,8 +11,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Text;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Windows.Forms;
 using OpenHardwareMonitor.Hardware;
 using OxyPlot;
@@ -568,8 +570,18 @@ namespace OpenHardwareMonitor.GUI {
 
       public bool IsStacked { get; set; }
 
+      // OxyPlot's render context draws the text with grayscale antialiasing
+      // (AntiAliasGridFit); ClearType, like the rest of the window, is sharper.
+      // The Graphics it draws on isn't exposed, hence the reflection.
+      private static readonly FieldInfo graphicsField =
+        typeof(GraphicsRenderContext).GetField("g",
+          BindingFlags.Instance | BindingFlags.NonPublic);
+
       protected override void RenderOverride(IRenderContext rc, double width,
         double height) {
+        if (graphicsField != null && graphicsField.GetValue(rc) is Graphics g)
+          g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
         // the plot area of the previous render is a good estimate of the
         // current one, as it only depends on the size and the margins
         beforeRender(PlotArea.Height > 0 ? PlotArea.Height : height);
