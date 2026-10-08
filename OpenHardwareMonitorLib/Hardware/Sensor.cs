@@ -110,14 +110,22 @@ namespace OpenHardwareMonitor.Hardware {
       using (GZipStream c = new GZipStream(m, CompressionMode.Decompress))
       using (BinaryReader reader = new BinaryReader(c)) {
 
+        // PeekChar() can't be used to detect the end: it always returns -1
+        // on a non-seekable stream like GZipStream
         long t = 0;
-        while (reader.PeekChar() != -1) {
-          t += reader.ReadInt64();
-          DateTime time = DateTime.FromBinary(t);
-          if (time > now)
-            break;
-          float value = reader.ReadSingle();
-          AppendValue(value, time);
+        try {
+          while (true) {
+            t += reader.ReadInt64();
+            DateTime time = DateTime.FromBinary(t);
+            if (time > now)
+              break;
+            // must match SetSensorValuesToSettings, which writes doubles
+            double value = reader.ReadDouble();
+            AppendValue(value, time);
+          }
+        } catch (EndOfStreamException) {
+        } catch (ArgumentException) {
+          // invalid date in a corrupted history: keep what was read so far
         }
 
       }
