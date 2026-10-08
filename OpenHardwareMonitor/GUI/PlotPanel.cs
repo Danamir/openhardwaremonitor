@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
 using OpenHardwareMonitor.Hardware;
@@ -28,6 +29,8 @@ namespace OpenHardwareMonitor.GUI {
 
     // gap between stacked panels, in pixels
     private const double StackGap = 4;
+    // margin kept around the values of a panel, in pixels
+    private const double ValueMargin = 3;
 
     private readonly PlotView plot;
     private readonly StackedPlotModel model;
@@ -204,6 +207,7 @@ namespace OpenHardwareMonitor.GUI {
         axis.AxislineStyle = LineStyle.Solid;
         axis.Title = type.ToString();
         axis.Key = type.ToString();
+        axis.LabelFormatter = FormatTickLabel;
 
         axis.Zoom(
           settings.GetValue("plotPanel.Min" + axis.Key, float.NaN),
@@ -214,7 +218,7 @@ namespace OpenHardwareMonitor.GUI {
         axes.Add(type, axis);
       }
 
-      var model = new StackedPlotModel(LayoutStackedAxes, StackGap);
+      var model = new StackedPlotModel(BeforeRender);
       model.Axes.Add(timeAxis);
       foreach (var axis in axes.Values)
         model.Axes.Add(axis);
@@ -300,6 +304,42 @@ namespace OpenHardwareMonitor.GUI {
         }
       }
 
+    }
+
+    // The plot area starts after the widest tick label, so pad the labels to
+    // 3 digits with figure spaces (as wide as a digit): the plot doesn't
+    // shift when a "100" appears among 2 digit labels.
+    private static string FormatTickLabel(double value) {
+      var label = value.ToString("g6", CultureInfo.CurrentCulture);
+      return label.Length < 3 ? new string(' ', 3 - label.Length) + label :
+        label;
+    }
+
+    private void BeforeRender(double plotHeight) {
+      if (stackedAxes.Value)
+        LayoutStackedAxes(StackGap / plotHeight);
+      UpdateValueLimits(plotHeight);
+    }
+
+    // Value axes can't be panned or zoomed below 0, nor above 100 for
+    // percentages, except for a margin of a few pixels. The automatic range
+    // (also after "reset axes") keeps the same margin around the values.
+    private void UpdateValueLimits(double plotHeight) {
+      foreach (var axis in axes.Values) {
+        if (!axis.IsAxisVisible)
+          continue;
+        var height = (axis.EndPosition - axis.StartPosition) * plotHeight;
+        if (height <= 2 * ValueMargin)
+          continue;
+        var range = axis.ActualMaximum - axis.ActualMinimum;
+        var margin = range > 0 && !double.IsInfinity(range) ?
+          ValueMargin * range / height : 0;
+        axis.AbsoluteMinimum = -margin;
+        axis.AbsoluteMaximum = axis.Unit == "%" ? 100 + margin : double.MaxValue;
+        // padding is a fraction of the data range, added on each side
+        axis.MinimumPadding = ValueMargin / (height - 2 * ValueMargin);
+        axis.MaximumPadding = axis.MinimumPadding;
+      }
     }
 
     // Splits the plot area height between the visible axes, leaving a gap
@@ -519,24 +559,20 @@ namespace OpenHardwareMonitor.GUI {
     // frames each of them.
     private class StackedPlotModel : PlotModel {
 
-      private readonly Action<double> layoutAxes;
-      private readonly double gapSize;
+      private readonly Action<double> beforeRender;
 
-      public StackedPlotModel(Action<double> layoutAxes, double gapSize) {
-        this.layoutAxes = layoutAxes;
-        this.gapSize = gapSize;
+      // beforeRender gets the plot area height, to lay out the axes in pixels
+      public StackedPlotModel(Action<double> beforeRender) {
+        this.beforeRender = beforeRender;
       }
 
       public bool IsStacked { get; set; }
 
       protected override void RenderOverride(IRenderContext rc, double width,
         double height) {
-        if (IsStacked) {
-          // the plot area of the previous render is a good estimate of the
-          // current one, as it only depends on the size and the margins
-          var plotHeight = PlotArea.Height > 0 ? PlotArea.Height : height;
-          layoutAxes(gapSize / plotHeight);
-        }
+        // the plot area of the previous render is a good estimate of the
+        // current one, as it only depends on the size and the margins
+        beforeRender(PlotArea.Height > 0 ? PlotArea.Height : height);
 
         base.RenderOverride(rc, width, height);
 
