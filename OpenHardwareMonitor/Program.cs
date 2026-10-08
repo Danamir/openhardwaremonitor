@@ -83,20 +83,33 @@ namespace OpenHardwareMonitor
         /// Checks if there is already an instance of Openhardwaremonitor running and brings up its window
         /// in case its minimized or as icon in taskbar
         /// </summary>
+        /// <remarks>
+        /// Only instances answering on the second instance pipe count. Older versions sharing the same
+        /// process name (e.g. the original 0.9.x) don't listen on it and must not block the startup.
+        /// </remarks>
         private static bool CheckIfProcessExists()
         {
-            bool processExists = false;
             Process thisInstance = Process.GetCurrentProcess();
-            if(Process.GetProcessesByName(thisInstance.ProcessName).Length > 1)
+            if (Process.GetProcessesByName(thisInstance.ProcessName).Length <= 1)
             {
-                processExists = true;
-                using (var clientPipe = InterprocessCommunicationFactory.GetClientPipe())
-                {
-                    clientPipe.Connect();
-                    clientPipe.Write(new byte[] { (byte)SecondInstanceService.SecondInstanceRequest.MaximizeWindow }, 0, 1);
-                } 
+                return false;
             }
-            return processExists;
+
+            using (var clientPipe = InterprocessCommunicationFactory.GetClientPipe())
+            {
+                try
+                {
+                    clientPipe.Connect(1000);
+                }
+                catch (TimeoutException)
+                {
+                    Logging.LogInfo("Another process with the same name is running, but it doesn't answer on the instance pipe: starting anyway");
+                    return false;
+                }
+
+                clientPipe.Write(new byte[] { (byte)SecondInstanceService.SecondInstanceRequest.MaximizeWindow }, 0, 1);
+            }
+            return true;
         }
 
         private static bool ParseCommandLine(string[] args)
