@@ -40,6 +40,11 @@ namespace OpenHardwareMonitor.GUI {
 
     private DateTime now;
 
+    // right button drag pans the plot, so the context menu must not open
+    // when the button is released after a drag
+    private Rectangle rightDragBox = Rectangle.Empty;
+    private bool rightDragged;
+
     public PlotPanel(PersistentSettings settings, UnitManager unitManager) {
       this.settings = settings;
       this.unitManager = unitManager;
@@ -51,14 +56,38 @@ namespace OpenHardwareMonitor.GUI {
       this.plot = new PlotView();
       this.plot.Dock = DockStyle.Fill;
       this.plot.Model = model;
+      this.plot.Controller = CreateController();
       this.plot.BackColor = Color.White;
       this.plot.ContextMenuStrip = CreateMenu();
+      this.plot.MouseDown += PlotMouseDown;
+      this.plot.MouseMove += PlotMouseMove;
+      this.plot.ContextMenuStrip.Opening += (sender, e) => {
+        if (rightDragged) {
+          e.Cancel = true;
+          rightDragged = false;
+        }
+      };
 
       UpdateAxesPosition();
 
       this.SuspendLayout();
       this.Controls.Add(plot);
       this.ResumeLayout(true);
+    }
+
+    private void PlotMouseDown(object sender, MouseEventArgs e) {
+      if (e.Button != MouseButtons.Right)
+        return;
+      Size dragSize = SystemInformation.DragSize;
+      rightDragBox = new Rectangle(
+        e.X - dragSize.Width / 2, e.Y - dragSize.Height / 2,
+        dragSize.Width, dragSize.Height);
+      rightDragged = false;
+    }
+
+    private void PlotMouseMove(object sender, MouseEventArgs e) {
+      if ((e.Button & MouseButtons.Right) != 0 && !rightDragBox.Contains(e.Location))
+        rightDragged = true;
     }
 
     public void SetCurrentSettings() {
@@ -97,31 +126,31 @@ namespace OpenHardwareMonitor.GUI {
       ToolStripMenuItem[] timeWindowMenuItems =
         {
           new ToolStripMenuItem("Auto", null,
-            (s, e) => { timeAxis.Zoom(0, double.NaN); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, double.NaN); InvalidatePlot(); }),
           new ToolStripMenuItem("5 min",  null,
-            (s, e) => { timeAxis.Zoom(0, 5 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 5 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("10 min",  null,
-            (s, e) => { timeAxis.Zoom(0, 10 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 10 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("20 min",  null,
-            (s, e) => { timeAxis.Zoom(0, 20 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 20 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("30 min",  null,
-            (s, e) => { timeAxis.Zoom(0, 30 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 30 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("45 min",  null,
-            (s, e) => { timeAxis.Zoom(0, 45 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 45 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("1 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("1.5 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 1.5 * 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 1.5 * 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("2 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 2 * 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 2 * 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("3 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 3 * 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 3 * 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("6 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 6 * 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 6 * 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("12 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 12 * 60 * 60); InvalidatePlot(); }),
+            (s, e) => { timeAxis.SetWindow(0, 12 * 60 * 60); InvalidatePlot(); }),
           new ToolStripMenuItem("24 h",  null,
-            (s, e) => { timeAxis.Zoom(0, 24 * 60 * 60); InvalidatePlot(); }) };
+            (s, e) => { timeAxis.SetWindow(0, 24 * 60 * 60); InvalidatePlot(); }) };
       foreach (ToolStripMenuItem mi in timeWindowMenuItems)
         timeWindow.DropDownItems.Add(mi);
       menu.Items.Add(timeWindow);
@@ -145,7 +174,7 @@ namespace OpenHardwareMonitor.GUI {
       timeAxis.AbsoluteMinimum = 0;
       timeAxis.Minimum = 0;
       timeAxis.AbsoluteMaximum = 24 * 60 * 60;
-      timeAxis.Zoom(
+      timeAxis.SetWindow(
         settings.GetValue("plotPanel.MinTimeWindow", 0.0f),
         settings.GetValue("plotPanel.MaxTimeWindow", 10.0f * 60));
       timeAxis.StringFormat = "h:mm";
@@ -204,19 +233,23 @@ namespace OpenHardwareMonitor.GUI {
       foreach (ISensor sensor in sensors) {
         var series = new LineSeries();
         if (sensor.SensorType == SensorType.Temperature) {
-          series.ItemsSource = sensor.Values.Select(value => new DataPoint(
-            (now - value.Time).TotalSeconds,
-            unitManager.TemperatureUnit == TemperatureUnit.Celsius ? 
+          series.ItemsSource = sensor.Values.Select(value => new PlotValue(
+            value.Time,
+            unitManager.TemperatureUnit == TemperatureUnit.Celsius ?
               value.Value : UnitManager.CelsiusToFahrenheit(value.Value).Value
           ));
         } else {
-          series.ItemsSource = sensor.Values.Select(value => new DataPoint(
-            (now - value.Time).TotalSeconds, value.Value));
+          series.ItemsSource = sensor.Values.Select(value => new PlotValue(
+            value.Time, value.Value));
         }
+        series.Mapping = item => {
+          var value = (PlotValue)item;
+          return new DataPoint((now - value.UtcTime).TotalSeconds, value.Value);
+        };
         series.Color = colors[sensor].ToOxyColor();
         series.StrokeThickness = 1;
         series.YAxisKey = axes[sensor.SensorType].Key;
-        series.Title = sensor.Hardware.Name + " " + sensor.Name;
+        series.Title = sensor.Hardware.Name + " - " + sensor.Name;
         this.model.Series.Add(series);
 
         types.Add(sensor.SensorType);
@@ -299,15 +332,181 @@ namespace OpenHardwareMonitor.GUI {
           "°C" : "°F";
       }
 
+      // set here rather than in SetSensors, so it follows the temperature unit
+      foreach (var series in model.Series.OfType<LineSeries>()) {
+        var type = (SensorType)Enum.Parse(typeof(SensorType), series.YAxisKey);
+        series.TrackerFormatString = TrackerFormat(type, axes[type].Unit);
+      }
+
       this.plot.InvalidatePlot(true);
+    }
+
+    // Tooltip: sensor name, then the value rounded like in the sensor tree,
+    // with its unit, and the local time of the point. {Value} and {Time} are
+    // read from the PlotValue item of the point.
+    private static string TrackerFormat(SensorType type, string unit) {
+      string valueFormat;
+      switch (type) {
+        case SensorType.Voltage:
+        case SensorType.Factor:
+          valueFormat = "0.000"; break;
+        case SensorType.Fan:
+        case SensorType.Flow:
+        case SensorType.RawValue:
+        case SensorType.TimeSpan:
+          valueFormat = "0"; break;
+        default:
+          valueFormat = "0.0"; break;
+      }
+      return "{0}\n{Value:" + valueFormat + "}" +
+        (string.IsNullOrEmpty(unit) || unit == "1" ? "" : " " + unit) +
+        " at {Time:HH:mm:ss}";
+    }
+
+    // Item behind each plotted point: the x coordinate is relative to now,
+    // so the tooltip needs the original time of the value.
+    private class PlotValue {
+      public PlotValue(DateTime utcTime, double value) {
+        UtcTime = utcTime;
+        Value = value;
+      }
+
+      public DateTime UtcTime { get; }
+      public DateTime Time { get { return UtcTime.ToLocalTime(); } }
+      public double Value { get; }
+    }
+
+    // Mouse bindings: left drag pans the time, right drag pans the values,
+    // shift + left button shows the tooltip of the nearest point.
+    private static PlotController CreateController() {
+      var controller = new PlotController();
+      controller.BindMouseDown(OxyMouseButton.Left,
+        new DelegatePlotCommand<OxyMouseDownEventArgs>((view, c, args) =>
+          c.AddMouseManipulator(view, new AxisPanManipulator(view, true), args)));
+      controller.BindMouseDown(OxyMouseButton.Right,
+        new DelegatePlotCommand<OxyMouseDownEventArgs>((view, c, args) =>
+          c.AddMouseManipulator(view, new AxisPanManipulator(view, false), args)));
+      controller.BindMouseDown(OxyMouseButton.Left, OxyModifierKeys.Shift,
+        PlotCommands.SnapTrack);
+      controller.BindMouseDown(OxyMouseButton.Middle, OxyModifierKeys.Shift,
+        new DelegatePlotCommand<OxyMouseDownEventArgs>((view, c, args) =>
+          c.AddMouseManipulator(view, new TimeZoomManipulator(view), args)));
+      return controller;
+    }
+
+    // Shift + middle button drag: selects a time range over the whole plot
+    // height and zooms the time axis to it.
+    private class TimeZoomManipulator : MouseManipulator {
+      private ViewTimeSpanAxis axis;
+      private OxyRect plotArea;
+
+      public TimeZoomManipulator(IPlotView plotView) : base(plotView) {
+      }
+
+      public override void Started(OxyMouseEventArgs e) {
+        base.Started(e);
+        AssignAxes(e.Position);
+        axis = XAxis as ViewTimeSpanAxis;
+        if (axis != null) {
+          plotArea = PlotView.ActualModel.PlotArea;
+          PlotView.SetCursorType(CursorType.ZoomHorizontal);
+        }
+        e.Handled = true;
+      }
+
+      public override void Delta(OxyMouseEventArgs e) {
+        base.Delta(e);
+        if (axis != null)
+          PlotView.ShowZoomRectangle(Selection(e.Position));
+        e.Handled = true;
+      }
+
+      public override void Completed(OxyMouseEventArgs e) {
+        base.Completed(e);
+        if (axis != null) {
+          PlotView.HideZoomRectangle();
+          PlotView.SetCursorType(CursorType.Default);
+          OxyRect selection = Selection(e.Position);
+          // ignore a click without a real drag
+          if (selection.Width > 2) {
+            double t0 = axis.InverseTransform(selection.Left);
+            double t1 = axis.InverseTransform(selection.Right);
+            axis.SetWindow(Math.Max(0, Math.Min(t0, t1)), Math.Max(t0, t1));
+            PlotView.InvalidatePlot(false);
+          }
+        }
+        e.Handled = true;
+      }
+
+      private OxyRect Selection(ScreenPoint position) {
+        double x0 = Math.Max(plotArea.Left,
+          Math.Min(StartPosition.X, position.X));
+        double x1 = Math.Min(plotArea.Right,
+          Math.Max(StartPosition.X, position.X));
+        return new OxyRect(x0, plotArea.Top, Math.Max(0, x1 - x0),
+          plotArea.Height);
+      }
+    }
+
+    // Like OxyPlot's pan, but only along the horizontal (time) or the
+    // vertical (value) axis under the cursor.
+    private class AxisPanManipulator : MouseManipulator {
+      private readonly bool horizontal;
+      private Axis axis;
+      private ScreenPoint previousPosition;
+
+      public AxisPanManipulator(IPlotView plotView, bool horizontal)
+        : base(plotView) {
+        this.horizontal = horizontal;
+      }
+
+      public override void Started(OxyMouseEventArgs e) {
+        base.Started(e);
+        AssignAxes(e.Position);
+        axis = horizontal ? XAxis : YAxis;
+        previousPosition = e.Position;
+        if (axis != null && axis.IsPanEnabled)
+          PlotView.SetCursorType(CursorType.Pan);
+        e.Handled = true;
+      }
+
+      public override void Delta(OxyMouseEventArgs e) {
+        base.Delta(e);
+        if (axis != null && axis.IsPanEnabled) {
+          axis.Pan(previousPosition, e.Position);
+          PlotView.InvalidatePlot(false);
+        }
+        previousPosition = e.Position;
+        e.Handled = true;
+      }
+
+      public override void Completed(OxyMouseEventArgs e) {
+        base.Completed(e);
+        PlotView.SetCursorType(CursorType.Default);
+        e.Handled = true;
+      }
     }
 
     // OxyPlot 2 keeps the range set by Zoom() (time window menu, mouse zoom
     // and pan) in the protected ViewMinimum/ViewMaximum, not in Minimum and
     // Maximum. These axes expose it so it can be saved; NaN means automatic.
+    // The mouse wheel can't zoom the time axis: the window size is set from
+    // the menu, or reset to the whole range ("reset axes", middle double
+    // click). It can only be panned, by the left button drag.
     private class ViewTimeSpanAxis : TimeSpanAxis {
+      public ViewTimeSpanAxis() {
+        IsZoomEnabled = false;
+      }
+
       public double ZoomMinimum { get { return ViewMinimum; } }
       public double ZoomMaximum { get { return ViewMaximum; } }
+
+      public void SetWindow(double minimum, double maximum) {
+        // Zoom() is ignored while zooming is disabled
+        IsZoomEnabled = true;
+        Zoom(minimum, maximum);
+        IsZoomEnabled = false;
+      }
     }
 
     private class ViewLinearAxis : LinearAxis {
