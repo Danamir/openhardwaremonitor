@@ -33,7 +33,7 @@ namespace OpenHardwareMonitor.Hardware.HDD {
 
     private DriveInfo[] driveInfos;
     private Sensor usageSensor;
-    private List<(Sensor Sensor, double? Value)> performanceSensors;
+    private List<Sensor> performanceSensors;
     private DrivePerformanceValues lastPerformanceValues;
     private ISmart smart;
 
@@ -46,7 +46,7 @@ namespace OpenHardwareMonitor.Hardware.HDD {
       this.index = index;
       this.count = 0;
 
-      performanceSensors = new List<(Sensor, double? value)>();
+      performanceSensors = new List<Sensor>();
       lastPerformanceValues = null;
 
       string[] logicalDrives = WindowsStorage.GetLogicalDrives(index);
@@ -119,93 +119,81 @@ namespace OpenHardwareMonitor.Hardware.HDD {
 
       // Our sensor indices just need to be different from any existing sensors
       if (performanceValues != null) {
-        var sensors = CreatePerformanceSensors(performanceValues);
-        foreach (var elem in sensors) {
-          ActivateSensor(elem.Item1);
+        int idx = Sensors.Length + 1;
+        foreach (var (name, type) in PerformanceSensorTypes) {
+          Sensor sensor = new Sensor(name, idx++, type, this, _settings);
+          ActivateSensor(sensor);
+          performanceSensors.Add(sensor);
         }
-
-        performanceSensors = sensors;
+        lastPerformanceValues = performanceValues;
       }
     }
 
-    /// <summary>
-    /// This method is used both for construction as well as updating the sensors. This avoids big if's on names
-    /// </summary>
-    private List<(Sensor, double? value)> CreatePerformanceSensors(DrivePerformanceValues throughputValues) {
-      int idx = Sensors.Length + 1;
-      List<(Sensor, double?)> newPerformanceSensors = new List<(Sensor, double?)>();
+    // The performance sensors, in the order of ComputePerformanceValues. New
+    // sensors go last: the index, part of the identifier, follows this order.
+    private static readonly (string Name, SensorType Type)[] PerformanceSensorTypes = {
+      ("Bytes read total", SensorType.Data),
+      ("Bytes written total", SensorType.Data),
+      ("Read time total", SensorType.TimeSpan),
+      ("Write time total", SensorType.TimeSpan),
+      ("Idle time total", SensorType.TimeSpan),
+      ("Read active time", SensorType.Load),
+      ("Write active time", SensorType.Load),
+      ("Job queue length", SensorType.RawValue),
+      ("Read throughput", SensorType.Throughput),
+      ("Write throughput", SensorType.Throughput),
+      ("Active time", SensorType.Load),
+    };
 
-      TimeSpan deltaTime = default;
-      if (lastPerformanceValues != null) {
-        deltaTime = throughputValues.QueryTime - lastPerformanceValues.QueryTime;
+    // The performance sensor of the given default name (the user can rename
+    // the sensors), or null when the drive has no performance values
+    internal Sensor GetPerformanceSensor(string defaultName) {
+      int i = Array.FindIndex(PerformanceSensorTypes, t => t.Name == defaultName);
+      return i >= 0 && i < performanceSensors.Count ? performanceSensors[i] : null;
+    }
+
+    // The rates and percentages are averaged since the previous values; they
+    // are null when there is no previous value to compare to.
+    private double?[] ComputePerformanceValues(DrivePerformanceValues current,
+      DrivePerformanceValues last) {
+      double seconds = last != null ?
+        (current.QueryTime - last.QueryTime).TotalSeconds : 0;
+
+      double? Rate(double delta) {
+        return seconds > 0 ? delta / seconds : (double?)null;
       }
 
-      Sensor s = new Sensor("Bytes read total", idx++, SensorType.Data, this, _settings);
-      double? v = throughputValues.BytesRead * BYTES_TO_GIGABYTES;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Bytes written total", idx++, SensorType.Data, this, _settings);
-      v = throughputValues.BytesWritten * BYTES_TO_GIGABYTES;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Read time total", idx++, SensorType.TimeSpan, this, _settings);
-      v = throughputValues.ReadTime.TotalSeconds;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Write time total", idx++, SensorType.TimeSpan, this, _settings);
-      v = throughputValues.WriteTime.TotalSeconds;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Idle time total", idx++, SensorType.TimeSpan, this, _settings);
-      v = throughputValues.IdleTime.TotalSeconds;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Read active time", idx++, SensorType.Load, this, _settings);
-      if (lastPerformanceValues != null) {
-        TimeSpan valueDelta = throughputValues.ReadTime - lastPerformanceValues.ReadTime;
-        v = valueDelta.TotalSeconds / deltaTime.TotalSeconds;
-      } else {
-        v = null;
+      // Read and write times add up the time of every request: with
+      // concurrent requests, they can exceed the elapsed time
+      double? Percent(TimeSpan delta) {
+        double? rate = Rate(delta.TotalSeconds);
+        return rate.HasValue ? Math.Min(100, Math.Max(0, 100 * rate.Value)) :
+          (double?)null;
       }
 
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Write active time", idx++, SensorType.Load, this, _settings);
-      if (lastPerformanceValues != null) {
-        TimeSpan valueDelta = throughputValues.WriteTime - lastPerformanceValues.WriteTime;
-        v = valueDelta.TotalSeconds / deltaTime.TotalSeconds;
-      } else {
-        v = null;
+      // Like the "active time" of the task manager: the time the drive
+      // wasn't idle
+      double? activeTime = null;
+      if (last != null) {
+        double? idle = Percent(current.IdleTime - last.IdleTime);
+        activeTime = 100 - idle;
       }
 
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Job queue length", idx++, SensorType.RawValue, this, _settings);
-      v = throughputValues.QueueDepth;
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Read throughput", idx++, SensorType.Throughput, this, _settings);
-      if (lastPerformanceValues != null) {
-        double valueDelta = throughputValues.BytesRead - lastPerformanceValues.BytesRead;
-        v = (valueDelta * BYTES_TO_MEGABYTES) / deltaTime.TotalSeconds;
-      } else {
-        v = null;
-      }
-
-      newPerformanceSensors.Add((s, v));
-
-      s = new Sensor("Write throughput", idx++, SensorType.Throughput, this, _settings);
-      if (lastPerformanceValues != null) {
-        double valueDelta = throughputValues.BytesWritten - lastPerformanceValues.BytesWritten;
-        v = (valueDelta * BYTES_TO_MEGABYTES) / deltaTime.TotalSeconds;
-      } else {
-        v = null;
-      }
-      newPerformanceSensors.Add((s, v));
-
-      lastPerformanceValues = throughputValues;
-
-      return newPerformanceSensors;
+      return new double?[] {
+        current.BytesRead * BYTES_TO_GIGABYTES,
+        current.BytesWritten * BYTES_TO_GIGABYTES,
+        current.ReadTime.TotalSeconds,
+        current.WriteTime.TotalSeconds,
+        current.IdleTime.TotalSeconds,
+        last != null ? Percent(current.ReadTime - last.ReadTime) : null,
+        last != null ? Percent(current.WriteTime - last.WriteTime) : null,
+        current.QueueDepth,
+        last != null ?
+          Rate((current.BytesRead - last.BytesRead) * BYTES_TO_MEGABYTES) : null,
+        last != null ?
+          Rate((current.BytesWritten - last.BytesWritten) * BYTES_TO_MEGABYTES) : null,
+        activeTime,
+      };
     }
 
     public override HardwareType HardwareType {
@@ -216,15 +204,10 @@ namespace OpenHardwareMonitor.Hardware.HDD {
       if (performanceSensors.Count > 0) {
         var newValues = smart.ReadThroughputValues();
         if (newValues != null) {
-          var update = CreatePerformanceSensors(newValues);
-          foreach (var s in performanceSensors) {
-            var found = update.Single(x => x.Item1.Name == s.Sensor.Name);
-            if (found.value.HasValue) {
-              s.Sensor.Value = found.value;
-            } else {
-              s.Sensor.Value = null;
-            }
-          }
+          double?[] values = ComputePerformanceValues(newValues, lastPerformanceValues);
+          for (int i = 0; i < performanceSensors.Count; i++)
+            performanceSensors[i].Value = values[i];
+          lastPerformanceValues = newValues;
         }
       }
     }

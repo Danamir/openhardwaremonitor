@@ -20,8 +20,9 @@ namespace OpenHardwareMonitor.Hardware.HDD {
 
     private const int MAX_DRIVES = 32;
 
-    private readonly List<AbstractStorage> hardware = 
+    private readonly List<AbstractStorage> hardware =
       new List<AbstractStorage>();
+    private readonly StorageTotal total;
 
     public HarddriveGroup(ISettings settings) {
       if (OperatingSystem.IsUnix) 
@@ -41,11 +42,18 @@ namespace OpenHardwareMonitor.Hardware.HDD {
           previousNvmeDisk = nvme;
         }
       }
+
+      if (hardware.Count > 0)
+        total = new StorageTotal(hardware, settings);
     }
 
     public IReadOnlyList<IHardware> Hardware {
       get {
-        return hardware.ToArray();
+        // the total last: it's computed from the values of the drives
+        List<IHardware> list = new List<IHardware>(hardware);
+        if (total != null)
+          list.Add(total);
+        return list;
       }
     }
 
@@ -54,8 +62,9 @@ namespace OpenHardwareMonitor.Hardware.HDD {
     }
 
     public void Close() {
-      foreach (AbstractStorage hdd in hardware) 
+      foreach (AbstractStorage hdd in hardware)
         hdd.Dispose();
+      total?.Dispose();
     }
   }
 }
