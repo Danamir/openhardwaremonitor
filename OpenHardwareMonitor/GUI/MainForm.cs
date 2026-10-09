@@ -1120,27 +1120,7 @@ namespace OpenHardwareMonitor.GUI
                         ToolStripMenuItem item = new ToolStripMenuItem("Customize Line...");
                         item.Click += delegate (object obj, EventArgs args)
                         {
-                            Color? initialColor = node.PenColor;
-                            float initialWidth = node.LineWidth;
-                            PlotPanel.LinePattern initialStyle = node.LinePattern;
-                            int initialFill = node.FillOpacity;
-
-                            // the color shown on the plot, also when it's the default one
-                            Color color;
-                            if (!sensorPlotColors.TryGetValue(node.Sensor, out color))
-                                color = initialColor.GetValueOrDefault(Color.Black);
-
-                            using (CustomizeLineDialog dialog = new CustomizeLineDialog(
-                                node.Text, color, initialWidth, initialStyle, initialFill))
-                            {
-                                // preview on the plot while adjusting; the color is
-                                // only stored once picked, the default one otherwise
-                                dialog.LineChanged += (s, a) => node.SetLine(
-                                    dialog.ColorChanged ? dialog.LineColor : initialColor,
-                                    dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
-                                if (dialog.ShowDialog(this) != DialogResult.OK)
-                                    node.SetLine(initialColor, initialWidth, initialStyle, initialFill);
-                            }
+                            ShowCustomizeLine(node);
                         };
                         treeContextMenu.Items.Add(item);
                     }
@@ -1339,15 +1319,38 @@ namespace OpenHardwareMonitor.GUI
             form.ShowDialog();
         }
 
+        private void ShowCustomizeLine(SensorNode node)
+        {
+            Color? initialColor = node.PenColor;
+            float initialWidth = node.LineWidth;
+            PlotPanel.LinePattern initialStyle = node.LinePattern;
+            int initialFill = node.FillOpacity;
+
+            // the color shown on the plot, also when it's the default one
+            Color color;
+            if (!sensorPlotColors.TryGetValue(node.Sensor, out color))
+                color = initialColor.GetValueOrDefault(Color.Black);
+
+            using (CustomizeLineDialog dialog = new CustomizeLineDialog(
+                node.Text, color, initialWidth, initialStyle, initialFill))
+            {
+                // preview on the plot while adjusting; the color is
+                // only stored once picked, the default one otherwise
+                dialog.LineChanged += (s, a) => node.SetLine(
+                    dialog.ColorChanged ? dialog.LineColor : initialColor,
+                    dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    node.SetLine(initialColor, initialWidth, initialStyle, initialFill);
+            }
+        }
+
+        // the parameters of a sensor, if any, are in the context menu
         private void treeView_NodeMouseDoubleClick(object sender,
           TreeNodeAdvMouseEventArgs e)
         {
             SensorNode node = e.Node.Tag as SensorNode;
-            if (node != null && node.Sensor != null &&
-              node.Sensor.Parameters.Length > 0)
-            {
-                ShowParameterForm(node.Sensor);
-            }
+            if (node != null && node.Sensor != null)
+                ShowCustomizeLine(node);
         }
 
         private void celsiusMenuItem_Click(object sender, EventArgs e)
