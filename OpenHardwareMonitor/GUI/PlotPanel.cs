@@ -49,6 +49,7 @@ namespace OpenHardwareMonitor.GUI {
 
     private UserOption stackedAxes;
     private UserOption axisLabels;
+    private UserOption blendBars;
 
     private DateTime now;
     private bool paused;
@@ -134,6 +135,16 @@ namespace OpenHardwareMonitor.GUI {
         model.PlotMargins = ((UserOption)sender).Value ? new OxyThickness(double.NaN) : new OxyThickness(0);
       };
       menu.Items.Add(axisLabelsMenuItem);
+
+      ToolStripMenuItem blendBarsMenuItem = new ToolStripMenuItem("Blend Overlapping Bars");
+      blendBars = new UserOption("plotBlendBars", true,
+        blendBarsMenuItem, settings);
+      model.BlendBars = blendBars.Value;
+      blendBars.Changed += (sender, e) => {
+        model.BlendBars = blendBars.Value;
+        InvalidatePlot();
+      };
+      menu.Items.Add(blendBarsMenuItem);
 
       // the sensors keep recording; not saved, the plot isn't paused on start
       ToolStripMenuItem pauseMenuItem = new ToolStripMenuItem("Pause");
@@ -669,28 +680,197 @@ namespace OpenHardwareMonitor.GUI {
         List<FilledLineSeries> series = PlotModel.Series
           .OfType<FilledLineSeries>().Where(s => s.IsVisible).ToList();
         if (series.Count > 0 && series[0] == this) {
-          foreach (FilledLineSeries s in series)
-            s.RenderFills(rc);
+          Graphics g = StackedPlotModel.GraphicsOf(rc);
+          bool blend = ((StackedPlotModel)PlotModel).BlendBars && g != null;
+          foreach (FilledLineSeries s in series) {
+            if (!blend || !s.IsBar)
+              s.RenderFills(rc);
+          }
+          if (blend)
+            RenderBlendedBars(g, series.Where(s => s.IsBar && s.Fill.IsVisible()));
         }
         base.Render(rc);
       }
 
       private void RenderFills(IRenderContext rc) {
+        OxyRect clippingRect = GetClippingRect();
+        foreach (List<ScreenPoint> polygon in FillPolygons())
+          rc.DrawClippedPolygon(clippingRect, polygon, 1, Fill,
+            OxyColors.Undefined, 0);
+      }
+
+      // The areas between each run of defined points and 0, in screen
+      // coordinates; none without a fill
+      private List<List<ScreenPoint>> FillPolygons() {
+        List<List<ScreenPoint>> polygons = new List<List<ScreenPoint>>();
         if (!Fill.IsVisible() || ActualPoints == null || XAxis == null ||
           YAxis == null)
-          return;
-        OxyRect clippingRect = GetClippingRect();
+          return polygons;
         double baseline = YAxis.Transform(0);
         List<ScreenPoint> run = new List<ScreenPoint>();
         foreach (DataPoint point in ActualPoints) {
           if (point.IsDefined()) {
             run.Add(Transform(point));
           } else {
-            RenderFill(rc, clippingRect, run, baseline);
-            run.Clear();
+            AddFillPolygon(polygons, run, baseline);
+            run = new List<ScreenPoint>();
           }
         }
-        RenderFill(rc, clippingRect, run, baseline);
+        AddFillPolygon(polygons, run, baseline);
+        return polygons;
+      }
+
+      private static void AddFillPolygon(List<List<ScreenPoint>> polygons,
+        List<ScreenPoint> run, double baseline) {
+        if (run.Count < 2)
+          return;
+        run.Add(new ScreenPoint(run[run.Count - 1].X, baseline));
+        run.Add(new ScreenPoint(run[0].X, baseline));
+        polygons.Add(run);
+      }
+
+      // The filled bars of each panel, drawn per pixel column from the
+      // tallest to the shortest, like the Bandwidth Monitor: above the
+      // shorter bars, a bar keeps its color; where bars overlap, their colors
+      // add up (see BlendStrength), with the largest fill opacity among them.
+      private static void RenderBlendedBars(Graphics g,
+        IEnumerable<FilledLineSeries> bars) {
+        foreach (IGrouping<Axis, FilledLineSeries> panel in
+          bars.GroupBy(s => s.YAxis)) {
+          List<FilledLineSeries> series = panel.ToList();
+          OxyRect clip = series[0].GetClippingRect();
+          int left = (int)Math.Floor(clip.Left);
+          int columns = (int)Math.Ceiling(clip.Right) - left;
+          if (columns <= 0)
+            continue;
+          double[][] maxima = series
+            .Select(s => s.ColumnMaxima(left, columns)).ToArray();
+          Axis yAxis = series[0].YAxis;
+          double baseline = Math.Max(clip.Top, Math.Min(clip.Bottom,
+            yAxis.Transform(0)));
+
+          System.Drawing.Drawing2D.GraphicsState state = g.Save();
+          try {
+            g.SetClip(new RectangleF((float)clip.Left, (float)clip.Top,
+              (float)clip.Width, (float)clip.Height));
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            List<int> order = new List<int>();
+            for (int column = 0; column < columns; column++) {
+              order.Clear();
+              for (int i = 0; i < series.Count; i++) {
+                if (maxima[i][column] > 0)
+                  order.Add(i);
+              }
+              order.Sort((x, y) => maxima[y][column].CompareTo(maxima[x][column]));
+
+              (double R, double G, double B) blend = (0, 0, 0);
+              int alpha = 0;
+              for (int k = 0; k < order.Count; k++) {
+                OxyColor color = series[order[k]].Fill;
+                (double R, double G, double B) front = (color.R, color.G, color.B);
+                blend = k == 0 ? front : Blend(blend, front);
+                alpha = Math.Max(alpha, color.A);
+
+                // from the top of this bar down to the next shorter one
+                double top = Math.Max(clip.Top - 1,
+                  yAxis.Transform(maxima[order[k]][column]));
+                double bottom = k + 1 < order.Count ? Math.Max(clip.Top - 1,
+                  yAxis.Transform(maxima[order[k + 1]][column])) : baseline;
+                if (bottom <= top)
+                  continue;
+                using (SolidBrush brush = new SolidBrush(
+                  System.Drawing.Color.FromArgb(alpha, (int)blend.R,
+                  (int)blend.G, (int)blend.B))) {
+                  g.FillRectangle(brush, left + column, (float)top, 1,
+                    (float)(bottom - top));
+                }
+              }
+            }
+          } finally {
+            g.Restore(state);
+          }
+        }
+      }
+
+      // darkest channel an overlap is kept at or below, not to wash out
+      private const double BlendLightness = 160;
+
+      // The color of an overlap: one color added to the other (see
+      // BlendStrength), the way that stands out the most from the white
+      // background. Adding only lightens: blue added to yellow would give a
+      // pale yellow, close to white, and yellow added to blue a pale blue,
+      // which is kept whichever bar is in front.
+      private static (double R, double G, double B) Blend(
+        (double R, double G, double B) behind,
+        (double R, double G, double B) front) {
+        (double R, double G, double B) Add((double R, double G, double B) a,
+          (double R, double G, double B) b) {
+          double strength = BlendStrength(a, b);
+          return (Math.Min(255, a.R + strength * b.R),
+            Math.Min(255, a.G + strength * b.G),
+            Math.Min(255, a.B + strength * b.B));
+        }
+        (double R, double G, double B) frontAdded = Add(behind, front);
+        (double R, double G, double B) behindAdded = Add(front, behind);
+        return DistanceToWhite(behindAdded) > DistanceToWhite(frontAdded) ?
+          behindAdded : frontAdded;
+      }
+
+      // How much of color b is added to color a: as much as possible, up to
+      // all of it, while the darkest channel stays under BlendLightness, but
+      // at least half. Blue and red give magenta; blue and yellow, which
+      // would add up to white, a pale blue (160, 160, 255).
+      private static double BlendStrength((double R, double G, double B) a,
+        (double R, double G, double B) b) {
+        // the strength at which each channel reaches BlendLightness: the
+        // overlap stays dark enough while one of them is below it
+        double Reach(double channel, double added) {
+          if (added == 0)
+            return channel <= BlendLightness ? double.PositiveInfinity :
+              double.NegativeInfinity;
+          return (BlendLightness - channel) / added;
+        }
+        double strength = Math.Max(Reach(a.R, b.R),
+          Math.Max(Reach(a.G, b.G), Reach(a.B, b.B)));
+        return Math.Max(0.5, Math.Min(1, strength));
+      }
+
+      // Distance of a color to white, each channel weighted by its share of
+      // the brightness: a pale yellow is close to white, a pale blue far
+      private static double DistanceToWhite((double R, double G, double B) c) {
+        return Math.Sqrt(0.2126 * (255 - c.R) * (255 - c.R) +
+          0.7152 * (255 - c.G) * (255 - c.G) +
+          0.0722 * (255 - c.B) * (255 - c.B));
+      }
+
+      // The highest value of the bars in each pixel column from left, NaN
+      // for none: the spikes narrower than a pixel are kept
+      private double[] ColumnMaxima(int left, int columns) {
+        double[] maxima = new double[columns];
+        for (int c = 0; c < columns; c++)
+          maxima[c] = double.NaN;
+        IList<DataPoint> points = ActualPoints;
+        if (points == null || XAxis == null)
+          return maxima;
+        // the points are steps: between two points at different times, the
+        // value of the second one
+        for (int k = 0; k + 1 < points.Count; k++) {
+          DataPoint a = points[k];
+          DataPoint b = points[k + 1];
+          if (!a.IsDefined() || !b.IsDefined() || a.X == b.X)
+            continue;
+          double xa = XAxis.Transform(a.X);
+          double xb = XAxis.Transform(b.X);
+          int first = Math.Max(0, (int)Math.Floor(Math.Min(xa, xb)) - left);
+          int last = Math.Min(columns - 1,
+            (int)Math.Ceiling(Math.Max(xa, xb)) - 1 - left);
+          for (int c = first; c <= last; c++) {
+            if (double.IsNaN(maxima[c]) || b.Y > maxima[c])
+              maxima[c] = b.Y;
+          }
+        }
+        return maxima;
       }
 
       // Every mouse down hit tests the series. A series added by SetSensors
@@ -753,16 +933,6 @@ namespace OpenHardwareMonitor.GUI {
         return result;
       }
 
-      private void RenderFill(IRenderContext rc, OxyRect clippingRect,
-        List<ScreenPoint> run, double baseline) {
-        if (run.Count < 2)
-          return;
-        List<ScreenPoint> polygon = new List<ScreenPoint>(run);
-        polygon.Add(new ScreenPoint(run[run.Count - 1].X, baseline));
-        polygon.Add(new ScreenPoint(run[0].X, baseline));
-        rc.DrawClippedPolygon(clippingRect, polygon, 1, Fill,
-          OxyColors.Undefined, 0);
-      }
     }
 
     // Item behind each plotted point: the x coordinate is relative to now,
@@ -939,6 +1109,8 @@ namespace OpenHardwareMonitor.GUI {
       public bool IsStacked { get; set; }
       // shows "Paused" in the top right corner of the plot area
       public bool IsPaused { get; set; }
+      // overlapping bars blended per pixel column (see FilledLineSeries)
+      public bool BlendBars { get; set; }
 
       // OxyPlot's render context draws the text with grayscale antialiasing
       // (AntiAliasGridFit); ClearType, like the rest of the window, is sharper.
@@ -946,6 +1118,11 @@ namespace OpenHardwareMonitor.GUI {
       private static readonly FieldInfo graphicsField =
         typeof(GraphicsRenderContext).GetField("g",
           BindingFlags.Instance | BindingFlags.NonPublic);
+
+      // the Graphics the render context draws on, null if not found
+      public static Graphics GraphicsOf(IRenderContext rc) {
+        return graphicsField?.GetValue(rc) as Graphics;
+      }
 
       protected override void RenderOverride(IRenderContext rc, double width,
         double height) {
