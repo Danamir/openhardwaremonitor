@@ -99,7 +99,8 @@ if ($CopyDebugConfig) {
 Write-Host "Building Release..." -ForegroundColor Cyan
 # no MSBuild nodes or compiler server left running: they would keep the
 # console window open after the script ends
-dotnet build $project -c Release --nologo -v quiet --disable-build-servers
+# only the errors are shown: upstream code has hundreds of harmless warnings
+dotnet build $project -c Release --nologo -v quiet --disable-build-servers "-clp:ErrorsOnly"
 if ($LASTEXITCODE -ne 0) {
     Fail "Build failed, nothing installed."
 }
