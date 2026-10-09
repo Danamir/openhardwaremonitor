@@ -37,8 +37,13 @@ namespace OpenHardwareMonitor.GUI {
     private readonly PlotView plot;
     private readonly StackedPlotModel model;
     private readonly ViewTimeSpanAxis timeAxis = new ViewTimeSpanAxis();
-    private readonly SortedDictionary<SensorType, ViewLinearAxis> axes =
-      new SortedDictionary<SensorType, ViewLinearAxis>();
+    // value axes, one per sensor type plus the network throughput, from the
+    // top panel to the bottom one
+    private readonly List<ViewLinearAxis> axes = new List<ViewLinearAxis>();
+    private readonly Dictionary<SensorType, ViewLinearAxis> typeAxes =
+      new Dictionary<SensorType, ViewLinearAxis>();
+    // network throughput has its own panel, not to be dwarfed by the disks
+    private ViewLinearAxis networkAxis;
 
     private UserOption stackedAxes;
     private UserOption axisLabels;
@@ -101,7 +106,7 @@ namespace OpenHardwareMonitor.GUI {
       settings.SetValue("plotPanel.MinTimeWindow", (float)timeAxis.ZoomMinimum);
       settings.SetValue("plotPanel.MaxTimeWindow", (float)timeAxis.ZoomMaximum);
 
-      foreach (var axis in axes.Values) {
+      foreach (var axis in axes) {
         settings.SetValue("plotPanel.Min" + axis.Key, (float)axis.ZoomMinimum);
         settings.SetValue("plotPanel.Max" + axis.Key, (float)axis.ZoomMaximum);
       }
@@ -196,33 +201,27 @@ namespace OpenHardwareMonitor.GUI {
       units.Add(SensorType.Factor, "1");
       units.Add(SensorType.Power, "W");
       units.Add(SensorType.Data, "GB");
+      units.Add(SensorType.Throughput, "MB/s");
 
       foreach (SensorType type in Enum.GetValues(typeof(SensorType))) {
-        var axis = new ViewLinearAxis();
-        axis.Position = AxisPosition.Left;
-        axis.MajorGridlineStyle = LineStyle.Solid;
-        axis.MajorGridlineThickness = 1;
-        axis.MajorGridlineColor = timeAxis.MajorGridlineColor;
-        axis.MinorGridlineStyle = LineStyle.Solid;
-        axis.MinorGridlineThickness = 1;
-        axis.MinorGridlineColor = timeAxis.MinorGridlineColor;
-        axis.AxislineStyle = LineStyle.Solid;
-        axis.Title = type.ToString();
-        axis.Key = type.ToString();
-        axis.LabelFormatter = FormatTickLabel;
-
-        axis.Zoom(
-          settings.GetValue("plotPanel.Min" + axis.Key, float.NaN),
-          settings.GetValue("plotPanel.Max" + axis.Key, float.NaN));
-
+        var axis = CreateValueAxis(type, type.ToString(), type.ToString());
         if (units.ContainsKey(type))
           axis.Unit = units[type];
-        axes.Add(type, axis);
+        axes.Add(axis);
+        typeAxes.Add(type, axis);
+
+        if (type == SensorType.Throughput) {
+          // its key doesn't match a sensor type, so its zoom settings don't
+          // collide with another axis
+          networkAxis = CreateValueAxis(type, "Network", "NetworkThroughput");
+          networkAxis.Unit = axis.Unit;
+          axes.Add(networkAxis);
+        }
       }
 
       var model = new StackedPlotModel(BeforeRender);
       model.Axes.Add(timeAxis);
-      foreach (var axis in axes.Values)
+      foreach (var axis in axes)
         model.Axes.Add(axis);
       model.PlotMargins = new OxyThickness(0);
       model.IsLegendVisible = false;
@@ -230,11 +229,40 @@ namespace OpenHardwareMonitor.GUI {
       return model;
     }
 
+    private ViewLinearAxis CreateValueAxis(SensorType type, string title,
+      string key) {
+      var axis = new ViewLinearAxis();
+      axis.SensorType = type;
+      axis.Position = AxisPosition.Left;
+      axis.MajorGridlineStyle = LineStyle.Solid;
+      axis.MajorGridlineThickness = 1;
+      axis.MajorGridlineColor = timeAxis.MajorGridlineColor;
+      axis.MinorGridlineStyle = LineStyle.Solid;
+      axis.MinorGridlineThickness = 1;
+      axis.MinorGridlineColor = timeAxis.MinorGridlineColor;
+      axis.AxislineStyle = LineStyle.Solid;
+      axis.Title = title;
+      axis.Key = key;
+      axis.LabelFormatter = FormatTickLabel;
+
+      axis.Zoom(
+        settings.GetValue("plotPanel.Min" + axis.Key, float.NaN),
+        settings.GetValue("plotPanel.Max" + axis.Key, float.NaN));
+      return axis;
+    }
+
+    private ViewLinearAxis AxisOf(ISensor sensor) {
+      if (sensor.SensorType == SensorType.Throughput &&
+        sensor.Hardware.HardwareType == HardwareType.Network)
+        return networkAxis;
+      return typeAxes[sensor.SensorType];
+    }
+
     public void SetSensors(List<ISensor> sensors,
       IDictionary<ISensor, Color> colors) {
       this.model.Series.Clear();
 
-      ListSet<SensorType> types = new ListSet<SensorType>();
+      HashSet<ViewLinearAxis> usedAxes = new HashSet<ViewLinearAxis>();
 
       foreach (ISensor sensor in sensors) {
         var series = new LineSeries();
@@ -254,18 +282,16 @@ namespace OpenHardwareMonitor.GUI {
         };
         series.Color = colors[sensor].ToOxyColor();
         series.StrokeThickness = 1;
-        series.YAxisKey = axes[sensor.SensorType].Key;
+        var axis = AxisOf(sensor);
+        series.YAxisKey = axis.Key;
         series.Title = sensor.Hardware.Name + " - " + sensor.Name;
         this.model.Series.Add(series);
 
-        types.Add(sensor.SensorType);
+        usedAxes.Add(axis);
       }
 
-      foreach (var pair in axes.Reverse()) {
-        var axis = pair.Value;
-        var type = pair.Key;
-        axis.IsAxisVisible = types.Contains(type);
-      } 
+      foreach (var axis in axes)
+        axis.IsAxisVisible = usedAxes.Contains(axis);
 
       UpdateAxesPosition();
       InvalidatePlot();
@@ -277,7 +303,7 @@ namespace OpenHardwareMonitor.GUI {
         // the panel frames drawn by StackedPlotModel replace the axis
         // lines and the plot area border
         model.PlotAreaBorderThickness = new OxyThickness(0);
-        foreach (var axis in axes.Values) {
+        foreach (var axis in axes) {
           axis.PositionTier = 0;
           axis.AxislineStyle = LineStyle.None;
           axis.MajorGridlineStyle = LineStyle.Solid;
@@ -287,9 +313,7 @@ namespace OpenHardwareMonitor.GUI {
       } else {
         model.PlotAreaBorderThickness = new OxyThickness(1);
         var tier = 0;
-        foreach (var pair in axes.Reverse()) {
-          var axis = pair.Value;
-          var type = pair.Key;
+        foreach (var axis in Enumerable.Reverse(axes)) {
           if (axis.IsAxisVisible) {
             axis.StartPosition = 0;
             axis.EndPosition = 1;
@@ -327,7 +351,7 @@ namespace OpenHardwareMonitor.GUI {
     // percentages, except for a margin of a few pixels. The automatic range
     // (also after "reset axes") keeps the same margin around the values.
     private void UpdateValueLimits(double plotHeight) {
-      foreach (var axis in axes.Values) {
+      foreach (var axis in axes) {
         if (!axis.IsAxisVisible)
           continue;
         var height = (axis.EndPosition - axis.StartPosition) * plotHeight;
@@ -347,12 +371,12 @@ namespace OpenHardwareMonitor.GUI {
     // Splits the plot area height between the visible axes, leaving a gap
     // (as a fraction of the plot area height) between consecutive panels.
     private void LayoutStackedAxes(double gap) {
-      var count = axes.Values.Count(axis => axis.IsAxisVisible);
+      var count = axes.Count(axis => axis.IsAxisVisible);
       if (count == 0)
         return;
       var height = Math.Max(0, (1.0 - gap * (count - 1)) / count);
       var start = 0.0;
-      foreach (var axis in axes.Reverse().Select(pair => pair.Value)) {
+      foreach (var axis in Enumerable.Reverse(axes)) {
         axis.StartPosition = start;
         if (axis.IsAxisVisible) {
           axis.EndPosition = Math.Min(1, start + height);
@@ -366,18 +390,13 @@ namespace OpenHardwareMonitor.GUI {
     public void InvalidatePlot() {
       this.now = DateTime.UtcNow;
 
-      foreach (var pair in axes) {
-        var axis = pair.Value;
-        var type = pair.Key;
-        if (type == SensorType.Temperature)
-          axis.Unit = unitManager.TemperatureUnit == TemperatureUnit.Celsius ?
-          "°C" : "°F";
-      }
+      typeAxes[SensorType.Temperature].Unit =
+        unitManager.TemperatureUnit == TemperatureUnit.Celsius ? "°C" : "°F";
 
       // set here rather than in SetSensors, so it follows the temperature unit
       foreach (var series in model.Series.OfType<LineSeries>()) {
-        var type = (SensorType)Enum.Parse(typeof(SensorType), series.YAxisKey);
-        series.TrackerFormatString = TrackerFormat(type, axes[type].Unit);
+        var axis = axes.First(a => a.Key == series.YAxisKey);
+        series.TrackerFormatString = TrackerFormat(axis.SensorType, axis.Unit);
       }
 
       this.plot.InvalidatePlot(true);
@@ -397,6 +416,9 @@ namespace OpenHardwareMonitor.GUI {
         case SensorType.RawValue:
         case SensorType.TimeSpan:
           valueFormat = "0"; break;
+        case SensorType.Throughput:
+          // idle network and disks are well below 0.1 MB/s
+          valueFormat = "0.00"; break;
         default:
           valueFormat = "0.0"; break;
       }
@@ -552,6 +574,7 @@ namespace OpenHardwareMonitor.GUI {
     }
 
     private class ViewLinearAxis : LinearAxis {
+      public SensorType SensorType { get; set; }
       public double ZoomMinimum { get { return ViewMinimum; } }
       public double ZoomMaximum { get { return ViewMaximum; } }
     }
