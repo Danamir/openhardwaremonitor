@@ -11,6 +11,7 @@
 using OpenHardwareMonitor.Hardware;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 
 namespace OpenHardwareMonitor.GUI;
@@ -23,12 +24,11 @@ public class SensorNode : Node
     private string fixedFormat;
     private bool plot = false;
     private Color? penColor = null;
-    private int fillOpacity = 0;
-    private float lineWidth = DefaultLineWidth;
-    private PlotPanel.LinePattern linePattern = PlotPanel.LinePattern.Solid;
     private PlotPanel.LineDisplay lineDisplay = PlotPanel.LineDisplay.Line;
-
-    public const float DefaultLineWidth = 1;
+    // width, style and fill of each display, kept when switching between
+    // them; the color is shared
+    private readonly Dictionary<PlotPanel.LineDisplay, PlotPanel.PlotLine> lines =
+        new Dictionary<PlotPanel.LineDisplay, PlotPanel.PlotLine>();
 
     public string ValueToString(double? value)
     {
@@ -138,13 +138,17 @@ public class SensorNode : Node
         if (settings.Contains(id))
             this.PenColor = settings.GetValue(id, Color.Black);
 
-        this.fillOpacity = settings.GetValue(new Identifier(sensor.Identifier,
-            "fillOpacity").ToString(), 0);
-        this.lineWidth = settings.GetValue(new Identifier(sensor.Identifier,
-            "lineWidth").ToString(), DefaultLineWidth);
-        if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
-                "lineStyle").ToString(), null), out linePattern))
-            linePattern = PlotPanel.LinePattern.Solid;
+        foreach (PlotPanel.LineDisplay display in Enum.GetValues(typeof(PlotPanel.LineDisplay)))
+        {
+            PlotPanel.PlotLine line = DefaultLine(display);
+            line.Width = settings.GetValue(SettingId(display, "Width"), line.Width);
+            if (Enum.TryParse(settings.GetValue(SettingId(display, "Style"), null),
+                    out PlotPanel.LinePattern pattern))
+                line.Style = pattern;
+            line.FillOpacity = settings.GetValue(SettingId(display, "FillOpacity"),
+                line.FillOpacity);
+            lines[display] = line;
+        }
         if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
                 "lineDisplay").ToString(), null), out lineDisplay))
             lineDisplay = PlotPanel.LineDisplay.Line;
@@ -187,20 +191,58 @@ public class SensorNode : Node
         }
     }
 
+    // Width, style and fill of the current display.
     // Opacity in percent of the area filled under the plot line, 0 for none
     public int FillOpacity
     {
-        get { return fillOpacity; }
+        get { return lines[lineDisplay].FillOpacity; }
     }
 
     public float LineWidth
     {
-        get { return lineWidth; }
+        get { return lines[lineDisplay].Width; }
     }
 
     public PlotPanel.LinePattern LinePattern
     {
-        get { return linePattern; }
+        get { return lines[lineDisplay].Style; }
+    }
+
+    // Width, style and fill of a display, current or not (Color is unset)
+    public PlotPanel.PlotLine GetLine(PlotPanel.LineDisplay display)
+    {
+        PlotPanel.PlotLine line = lines[display];
+        return new PlotPanel.PlotLine
+        {
+            Display = display,
+            Width = line.Width,
+            Style = line.Style,
+            FillOpacity = line.FillOpacity
+        };
+    }
+
+    // Bars are filled and have no outline by default
+    public static PlotPanel.PlotLine DefaultLine(PlotPanel.LineDisplay display)
+    {
+        bool bar = display == PlotPanel.LineDisplay.Bar;
+        return new PlotPanel.PlotLine
+        {
+            Display = display,
+            Width = bar ? 0 : 1,
+            Style = PlotPanel.LinePattern.Solid,
+            FillOpacity = bar ? 50 : 0
+        };
+    }
+
+    // The line keeps the names of the settings from before the bars:
+    // lineWidth, lineStyle, fillOpacity; then barWidth, barStyle, ...
+    private string SettingId(PlotPanel.LineDisplay display, string name)
+    {
+        if (display == PlotPanel.LineDisplay.Line)
+            name = name == "FillOpacity" ? "fillOpacity" : "line" + name;
+        else
+            name = display.ToString().ToLowerInvariant() + name;
+        return new Identifier(sensor.Identifier, name).ToString();
     }
 
     public PlotPanel.LineDisplay LineDisplay
@@ -208,16 +250,24 @@ public class SensorNode : Node
         get { return lineDisplay; }
     }
 
-    // Sets the whole customization of the plot line at once, so the plot is
-    // updated only once. The default values aren't stored.
+    // Sets the display, the color, and the width, style and fill of that
+    // display at once, so the plot is updated only once. The default values
+    // aren't stored.
     public void SetLine(PlotPanel.LineDisplay display, Color? color, float width,
         PlotPanel.LinePattern pattern, int fill)
     {
+        SetLine(display, color, width, pattern, fill, true);
+    }
+
+    private void SetLine(PlotPanel.LineDisplay display, Color? color, float width,
+        PlotPanel.LinePattern pattern, int fill, bool update)
+    {
         lineDisplay = display;
         penColor = color;
-        lineWidth = width;
-        linePattern = pattern;
-        fillOpacity = fill;
+        PlotPanel.PlotLine line = lines[display];
+        line.Width = width;
+        line.Style = pattern;
+        line.FillOpacity = fill;
 
         string id = new Identifier(sensor.Identifier, "lineDisplay").ToString();
         if (display != PlotPanel.LineDisplay.Line)
@@ -231,32 +281,46 @@ public class SensorNode : Node
         else
             settings.Remove(id);
 
-        id = new Identifier(sensor.Identifier, "lineWidth").ToString();
-        if (width != DefaultLineWidth)
+        PlotPanel.PlotLine defaults = DefaultLine(display);
+
+        id = SettingId(display, "Width");
+        if (width != defaults.Width)
             settings.SetValue(id, width);
         else
             settings.Remove(id);
 
-        id = new Identifier(sensor.Identifier, "lineStyle").ToString();
-        if (pattern != PlotPanel.LinePattern.Solid)
+        id = SettingId(display, "Style");
+        if (pattern != defaults.Style)
             settings.SetValue(id, pattern.ToString());
         else
             settings.Remove(id);
 
-        id = new Identifier(sensor.Identifier, "fillOpacity").ToString();
-        if (fill > 0)
+        id = SettingId(display, "FillOpacity");
+        if (fill != defaults.FillOpacity)
             settings.SetValue(id, fill);
         else
             settings.Remove(id);
 
-        if (PlotSelectionChanged != null)
+        if (update && PlotSelectionChanged != null)
             PlotSelectionChanged(this, null);
+    }
+
+    // Restores the display and the settings of all the displays, as got from
+    // GetLine: when the customization is cancelled
+    public void SetLines(PlotPanel.LineDisplay display, Color? color,
+        IEnumerable<PlotPanel.PlotLine> displays)
+    {
+        foreach (PlotPanel.PlotLine line in displays)
+            SetLine(line.Display, color, line.Width, line.Style, line.FillOpacity,
+                false);
+        PlotPanel.PlotLine current = lines[display];
+        SetLine(display, color, current.Width, current.Style, current.FillOpacity);
     }
 
     public void ResetLine()
     {
-        SetLine(PlotPanel.LineDisplay.Line, null, DefaultLineWidth,
-            PlotPanel.LinePattern.Solid, 0);
+        SetLines(PlotPanel.LineDisplay.Line, null,
+            lines.Keys.ToList().Select(DefaultLine));
     }
 
     public bool Plot

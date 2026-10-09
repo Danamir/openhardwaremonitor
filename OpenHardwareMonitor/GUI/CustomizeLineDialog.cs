@@ -16,7 +16,8 @@ using Cyotek.Windows.Forms;
 namespace OpenHardwareMonitor.GUI;
 
 // Customization of a plot line: display (line or bars), color, width, dash
-// style and fill opacity.
+// style and fill opacity. Each display has its own width, style and fill,
+// read through getLine when switching to it.
 // Changes are previewed through LineChanged; the caller restores the initial
 // values when the dialog is cancelled.
 internal sealed class CustomizeLineDialog : Form
@@ -28,6 +29,8 @@ internal sealed class CustomizeLineDialog : Form
 
     // set while a slider follows its field
     private bool syncingSlider;
+    // set while the fields are loaded with the values of another display
+    private bool loadingDisplay;
 
 
     private readonly ComboBox displayList;
@@ -39,8 +42,13 @@ internal sealed class CustomizeLineDialog : Form
     private readonly NumericUpDown fillValue;
 
     public CustomizeLineDialog(string sensorName, PlotPanel.LineDisplay display,
-        Color color, float width, PlotPanel.LinePattern pattern, int fillOpacity)
+        Color color, Func<PlotPanel.LineDisplay, PlotPanel.PlotLine> getLine)
     {
+        PlotPanel.PlotLine line = getLine(display);
+        float width = line.Width;
+        PlotPanel.LinePattern pattern = line.Style;
+        int fillOpacity = line.FillOpacity;
+
         Text = "Customize Line - " + sensorName;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -69,7 +77,24 @@ internal sealed class CustomizeLineDialog : Form
         foreach (PlotPanel.LineDisplay d in Enum.GetValues(typeof(PlotPanel.LineDisplay)))
             displayList.Items.Add(d);
         displayList.SelectedItem = display;
-        displayList.SelectedIndexChanged += (sender, e) => OnLineChanged();
+        displayList.SelectedIndexChanged += (sender, e) =>
+        {
+            PlotPanel.PlotLine other = getLine(LineDisplay);
+            loadingDisplay = true;
+            try
+            {
+                widthValue.Value = Math.Max(widthValue.Minimum,
+                    Math.Min(widthValue.Maximum, (decimal)other.Width));
+                styleList.SelectedItem = other.Style;
+                fillValue.Value = Math.Max(fillValue.Minimum,
+                    Math.Min(fillValue.Maximum, other.FillOpacity));
+            }
+            finally
+            {
+                loadingDisplay = false;
+            }
+            OnLineChanged();
+        };
         AddRow(layout, "Display", displayList, null, null);
 
         // color
@@ -259,6 +284,8 @@ internal sealed class CustomizeLineDialog : Form
 
     private void OnLineChanged()
     {
+        if (loadingDisplay)
+            return;
         LineChanged?.Invoke(this, EventArgs.Empty);
     }
 

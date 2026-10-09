@@ -1157,7 +1157,7 @@ namespace OpenHardwareMonitor.GUI
                         item.Click += delegate (object obj, EventArgs args)
                         {
                             if (MessageBox.Show(this,
-                                    "Reset the display, color, width, style and fill of the line of \"" +
+                                    "Reset the display and the color, width, style and fill of the line and bars of \"" +
                                     node.Text + "\" to their defaults?",
                                     "Reset Line", MessageBoxButtons.YesNo,
                                     MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
@@ -1351,9 +1351,9 @@ namespace OpenHardwareMonitor.GUI
         {
             PlotPanel.LineDisplay initialDisplay = node.LineDisplay;
             Color? initialColor = node.PenColor;
-            float initialWidth = node.LineWidth;
-            PlotPanel.LinePattern initialStyle = node.LinePattern;
-            int initialFill = node.FillOpacity;
+            // all the displays, the dialog can switch between them
+            List<PlotPanel.PlotLine> initialLines = Enum.GetValues(typeof(PlotPanel.LineDisplay))
+                .Cast<PlotPanel.LineDisplay>().Select(node.GetLine).ToList();
 
             // the color shown on the plot, also when it's the default one
             Color color;
@@ -1361,7 +1361,7 @@ namespace OpenHardwareMonitor.GUI
                 color = initialColor.GetValueOrDefault(Color.Black);
 
             using (CustomizeLineDialog dialog = new CustomizeLineDialog(
-                node.Text, initialDisplay, color, initialWidth, initialStyle, initialFill))
+                node.Text, initialDisplay, color, node.GetLine))
             {
                 // preview on the plot while adjusting; the color is
                 // only stored once picked, the default one otherwise
@@ -1369,8 +1369,7 @@ namespace OpenHardwareMonitor.GUI
                     dialog.ColorChanged ? dialog.LineColor : initialColor,
                     dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
                 if (dialog.ShowDialog(this) != DialogResult.OK)
-                    node.SetLine(initialDisplay, initialColor, initialWidth, initialStyle,
-                        initialFill);
+                    node.SetLines(initialDisplay, initialColor, initialLines);
             }
         }
 
