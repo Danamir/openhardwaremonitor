@@ -8,6 +8,7 @@
 	
 */
 
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -21,8 +22,10 @@ namespace OpenHardwareMonitor
     public class PersistentSettings : ISettings
     {
         private bool dirtyFlag = false;
+        // concurrent: the drives are scanned on a background thread at startup,
+        // and their sensors read and remove their settings meanwhile
         private readonly IDictionary<string, string> _settings =
-          new Dictionary<string, string>();
+          new ConcurrentDictionary<string, string>();
 
         public bool IsDirty => dirtyFlag;
 

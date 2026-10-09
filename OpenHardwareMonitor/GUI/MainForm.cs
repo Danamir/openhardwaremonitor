@@ -380,16 +380,25 @@ namespace OpenHardwareMonitor.GUI
               () => Program.Arguments.IgnoreRemovableDrives ? false : null);
             readHddSensors = new UserOption("hddMenuItem", true, hddMenuItem,
               settings, () => Program.Arguments.IgnoreMonitorHDD ? false : null);
+            // subscribing raises Changed: skip it, the drives are scanned in the
+            // background below, so the window shows without waiting for them
+            bool subscribingHdd = true;
             readHddSensors.Changed += delegate (object sender, EventArgs e)
             {
-                computer.HDDEnabled = readHddSensors.Value;
+                if (!subscribingHdd)
+                    computer.HDDEnabled = readHddSensors.Value;
             };
             readHddSensorsRemovable.Changed += delegate (object sender, EventArgs e)
             {
+                if (subscribingHdd)
+                    return;
                 // Refresh the Hdd settings
                 computer.HDDEnabled = false;
                 computer.HDDEnabled = readHddSensors.Value;
             };
+            subscribingHdd = false;
+            if (readHddSensors.Value)
+                EnableHddInBackground();
 
             readNetworkSensors = new UserOption("networkMenuItem", true, networkMenuItem,
               settings, () => Program.Arguments.IgnoreMonitorNetwork ? false : null);
@@ -538,6 +547,24 @@ namespace OpenHardwareMonitor.GUI
             foreach (var n in node.Children)
             {
                 InitExpandedState(n);
+            }
+        }
+
+        /// <summary>
+        /// Scans the drives on a background thread, then adds them to the tree
+        /// (back on the UI thread)
+        /// </summary>
+        private async void EnableHddInBackground()
+        {
+            try
+            {
+                await computer.EnableHDDInBackground();
+                // the drive nodes were added after the initial expanded state
+                InitExpandedState(treeView.Root);
+            }
+            catch (Exception ex)
+            {
+                Logging.LogError(ex, "Scanning the drives failed");
             }
         }
 

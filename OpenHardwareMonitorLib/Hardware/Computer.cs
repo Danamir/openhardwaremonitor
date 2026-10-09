@@ -17,6 +17,7 @@ using System.Reflection;
 using System.Runtime;
 using System.Security.Permissions;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using OpenHardwareMonitor.Hardware.Cpu;
 using OpenHardwareMonitor.Hardware.Gpu;
 using OpenHardwareMonitor.Hardware.Motherboard;
@@ -285,6 +286,42 @@ public class Computer : IComputer
             }
             hddEnabled = value;
         }
+    }
+
+    /// <summary>
+    /// Enables the drives like <see cref="HDDEnabled" />, but scans them on a
+    /// background thread (over a second with a few drives). The drives are added
+    /// once the scan is done, on the synchronization context of the caller (the
+    /// UI thread, which handles <see cref="HardwareAdded" />).
+    /// </summary>
+    public async Task EnableHDDInBackground()
+    {
+        if (!open || hddEnabled)
+            return;
+
+        hddEnabled = true;
+        HDD.HarddriveGroup group;
+        try
+        {
+            group = await Task.Run(() => new HDD.HarddriveGroup(settings));
+        }
+        catch
+        {
+            hddEnabled = false;
+            throw;
+        }
+
+        lock (m_groupsLock)
+        {
+            // the drives may have been disabled, or added again, meanwhile
+            if (open && hddEnabled && !m_groups.OfType<HDD.HarddriveGroup>().Any())
+            {
+                Add(group);
+                return;
+            }
+        }
+
+        group.Close();
     }
 
     public bool NetworkEnabled

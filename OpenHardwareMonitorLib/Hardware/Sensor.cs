@@ -106,12 +106,17 @@ namespace OpenHardwareMonitor.Hardware {
 
       byte[] array = Convert.FromBase64String(s);
       DateTime now = DateTime.UtcNow;
+      // decompress at once: reading the values one by one from the
+      // GZipStream takes ~12 µs per value, over 7 s at startup for a full
+      // day of history
       using (MemoryStream m = new MemoryStream(array))
       using (GZipStream c = new GZipStream(m, CompressionMode.Decompress))
-      using (BinaryReader reader = new BinaryReader(c)) {
+      using (MemoryStream d = new MemoryStream())
+      using (BinaryReader reader = new BinaryReader(d)) {
+        c.CopyTo(d);
+        d.Position = 0;
 
-        // PeekChar() can't be used to detect the end: it always returns -1
-        // on a non-seekable stream like GZipStream
+        // read until the end of the stream (EndOfStreamException)
         long t = 0;
         try {
           while (true) {
