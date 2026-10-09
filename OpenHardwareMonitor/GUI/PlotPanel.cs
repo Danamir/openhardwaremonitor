@@ -42,8 +42,10 @@ namespace OpenHardwareMonitor.GUI {
     private readonly List<ViewLinearAxis> axes = new List<ViewLinearAxis>();
     private readonly Dictionary<SensorType, ViewLinearAxis> typeAxes =
       new Dictionary<SensorType, ViewLinearAxis>();
-    // network throughput has its own panel, not to be dwarfed by the disks
+    // the network and GPU (PCIe) throughputs have their own panels, apart from
+    // the drives: their scales are too different
     private ViewLinearAxis networkAxis;
+    private ViewLinearAxis pcieAxis;
 
     private UserOption stackedAxes;
     private UserOption axisLabels;
@@ -211,11 +213,15 @@ namespace OpenHardwareMonitor.GUI {
         typeAxes.Add(type, axis);
 
         if (type == SensorType.Throughput) {
-          // its key doesn't match a sensor type, so its zoom settings don't
-          // collide with another axis
+          // the throughput axis is left to the drives; the keys of the others
+          // don't match a sensor type, so their zoom settings don't collide
+          axis.Title = "I/O";
           networkAxis = CreateValueAxis(type, "Network", "NetworkThroughput");
           networkAxis.Unit = axis.Unit;
           axes.Add(networkAxis);
+          pcieAxis = CreateValueAxis(type, "PCIe", "PcieThroughput");
+          pcieAxis.Unit = axis.Unit;
+          axes.Add(pcieAxis);
         }
       }
 
@@ -252,9 +258,16 @@ namespace OpenHardwareMonitor.GUI {
     }
 
     private ViewLinearAxis AxisOf(ISensor sensor) {
-      if (sensor.SensorType == SensorType.Throughput &&
-        sensor.Hardware.HardwareType == HardwareType.Network)
-        return networkAxis;
+      if (sensor.SensorType == SensorType.Throughput) {
+        switch (sensor.Hardware.HardwareType) {
+          case HardwareType.Network:
+            return networkAxis;
+          case HardwareType.GpuNvidia:
+          case HardwareType.GpuAmd:
+          case HardwareType.GpuIntel:
+            return pcieAxis;
+        }
+      }
       return typeAxes[sensor.SensorType];
     }
 
