@@ -646,17 +646,18 @@ internal sealed class NvidiaGpu : GenericGpu
             }
 
             // In MB/s, throughput sensors are passed as in KB/s.
+            // NVML gives KB/s, throughput sensors are in MB/s
             uint? rx = NvidiaML.NvmlDeviceGetPcieThroughput(_nvmlDevice.Value, NvidiaML.NvmlPcieUtilCounter.RxBytes);
             if (rx.HasValue)
             {
-                _pcieThroughputRx.Value = rx * 1024;
+                _pcieThroughputRx.Value = rx / 1024.0;
                 ActivateSensor(_pcieThroughputRx);
             }
 
             uint? tx = NvidiaML.NvmlDeviceGetPcieThroughput(_nvmlDevice.Value, NvidiaML.NvmlPcieUtilCounter.TxBytes);
             if (tx.HasValue)
             {
-                _pcieThroughputTx.Value = tx * 1024;
+                _pcieThroughputTx.Value = tx / 1024.0;
                 ActivateSensor(_pcieThroughputTx);
             }
         }
