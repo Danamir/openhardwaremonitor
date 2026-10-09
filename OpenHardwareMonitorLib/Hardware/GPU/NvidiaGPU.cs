@@ -422,7 +422,13 @@ internal sealed class NvidiaGpu : GenericGpu
         _memoryFree = new Sensor("GPU Memory Free", 0, SensorType.SmallData, this, settings);
         _memoryUsed = new Sensor("GPU Memory Used", 1, SensorType.SmallData, this, settings);
         _memoryTotal = new Sensor("GPU Memory Total", 2, SensorType.SmallData, this, settings);
-        _memoryLoad = new Sensor("GPU Memory", 3, SensorType.Load, this, settings);
+        // Index 3 is the "GPU Bus" utilization domain: sharing it, both sensors
+        // shared their settings (plot, color, history). Use the index left
+        // free between the loads and powers and the D3D node loads (or after
+        // the D3D node loads, starting at 0 when there are no loads or powers).
+        int loadAndPowerCount = (_loads?.Length ?? 0) + (_powers?.Length ?? 0);
+        int memoryLoadIndex = loadAndPowerCount > 0 ? loadAndPowerCount : (_gpuNodeUsage?.Length ?? 0);
+        _memoryLoad = new Sensor("GPU Memory", memoryLoadIndex, SensorType.Load, this, settings);
 
         Update();
     }
