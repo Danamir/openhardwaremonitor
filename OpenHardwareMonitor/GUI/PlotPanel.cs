@@ -51,6 +51,7 @@ namespace OpenHardwareMonitor.GUI {
     private UserOption axisLabels;
 
     private DateTime now;
+    private bool paused;
 
     // right button drag pans the plot, so the context menu must not open
     // when the button is released after a drag
@@ -133,6 +134,15 @@ namespace OpenHardwareMonitor.GUI {
         model.PlotMargins = ((UserOption)sender).Value ? new OxyThickness(double.NaN) : new OxyThickness(0);
       };
       menu.Items.Add(axisLabelsMenuItem);
+
+      // the sensors keep recording; not saved, the plot isn't paused on start
+      ToolStripMenuItem pauseMenuItem = new ToolStripMenuItem("Pause");
+      pauseMenuItem.Click += (sender, e) => {
+        paused = !paused;
+        pauseMenuItem.Checked = paused;
+        InvalidatePlot();
+      };
+      menu.Items.Add(pauseMenuItem);
 
       ToolStripMenuItem timeWindow = new ToolStripMenuItem("Time Window");
       ToolStripMenuItem[] timeWindowMenuItems =
@@ -279,7 +289,15 @@ namespace OpenHardwareMonitor.GUI {
       DashDashDotDot, LongDash, LongDashDot, LongDashDotDot
     }
 
+    // How the values of a sensor are drawn. Bar: each value is held back to
+    // the previous point (it averages the updates since then), as a step
+    // line; filled, it looks like touching bars. Stored by name.
+    public enum LineDisplay {
+      Line, Bar
+    }
+
     public sealed class PlotLine {
+      public LineDisplay Display { get; set; } = LineDisplay.Line;
       public Color Color { get; set; }
       public float Width { get; set; } = 1;
       public LinePattern Style { get; set; } = LinePattern.Solid;
@@ -334,22 +352,32 @@ namespace OpenHardwareMonitor.GUI {
       HashSet<ViewLinearAxis> usedAxes = new HashSet<ViewLinearAxis>();
 
       foreach (ISensor sensor in sensors) {
+        PlotLine line = lines[sensor];
         var series = new FilledLineSeries();
+        IEnumerable<PlotValue> values;
         if (sensor.SensorType == SensorType.Temperature) {
-          series.ItemsSource = sensor.Values.Select(value => new PlotValue(
+          values = sensor.Values.Select(value => new PlotValue(
             value.Time,
             unitManager.TemperatureUnit == TemperatureUnit.Celsius ?
               value.Value : UnitManager.CelsiusToFahrenheit(value.Value).Value
           ));
         } else {
-          series.ItemsSource = sensor.Values.Select(value => new PlotValue(
+          values = sensor.Values.Select(value => new PlotValue(
             value.Time, value.Value));
+        }
+        series.IsBar = line.Display == LineDisplay.Bar;
+        if (series.IsBar) {
+          series.Values = Steps(values);
+          // OxyPlot skips the points closer than MinimumSegmentLength (2 px)
+          // to the last drawn one: skipping a corner would slant a step
+          series.MinimumSegmentLength = 0;
+        } else {
+          series.Values = values;
         }
         series.Mapping = item => {
           var value = (PlotValue)item;
-          return new DataPoint((now - value.UtcTime).TotalSeconds, value.Value);
+          return new DataPoint((now - value.PlotTime).TotalSeconds, value.Value);
         };
-        PlotLine line = lines[sensor];
         OxyColor color = line.Color.ToOxyColor();
         LinePen(line.Width, out double penWidth, out double alpha);
         series.Color = OxyColor.FromAColor(
@@ -375,6 +403,21 @@ namespace OpenHardwareMonitor.GUI {
 
       UpdateAxesPosition();
       InvalidatePlot();
+    }
+
+    // Values as a step line: each value is held from the previous point to
+    // its own one. The corner point keeps the time of the value for the
+    // tooltip. Lazy, like the history it reads, so it follows the updates.
+    private static IEnumerable<PlotValue> Steps(IEnumerable<PlotValue> values) {
+      PlotValue previous = null;
+      foreach (PlotValue value in values) {
+        if (previous != null && !double.IsNaN(previous.Value) &&
+          !double.IsNaN(value.Value) && previous.Value != value.Value)
+          yield return new PlotValue(value.UtcTime, value.Value,
+            previous.UtcTime);
+        yield return value;
+        previous = value;
+      }
     }
 
     private void UpdateAxesPosition() {
@@ -467,8 +510,18 @@ namespace OpenHardwareMonitor.GUI {
       }
     }
 
+    // Called on each sensor update: the plot follows the time, unless paused
+    public void UpdatePlot() {
+      if (!paused)
+        InvalidatePlot();
+    }
+
     public void InvalidatePlot() {
-      this.now = DateTime.UtcNow;
+      // paused, the x coordinates stay relative to the time of the pause; the
+      // values recorded since then are after it, out of the time axis
+      if (!paused)
+        this.now = DateTime.UtcNow;
+      model.IsPaused = paused;
 
       typeAxes[SensorType.Temperature].Unit =
         unitManager.TemperatureUnit == TemperatureUnit.Celsius ? "°C" : "°F";
@@ -513,6 +566,20 @@ namespace OpenHardwareMonitor.GUI {
     private class FilledLineSeries : LineSeries {
       public OxyColor Fill { get; set; } = OxyColors.Undefined;
 
+      // The values to plot, read from the live sensor history
+      public IEnumerable<PlotValue> Values { get; set; }
+      // drawn as bars: the values are steps (see Steps)
+      public bool IsBar { get; set; }
+
+      // The tooltip gets the item of a point by its index in ItemsSource. A
+      // lazy ItemsSource is read again then, after the history changed (the
+      // oldest values expire): another value would be shown. The items are
+      // copied at each data update instead, the points are made from.
+      protected override void UpdateData() {
+        ItemsSource = Values?.ToList();
+        base.UpdateData();
+      }
+
       public override void Render(IRenderContext rc) {
         if (Fill.IsVisible()) {
           OxyRect clippingRect = GetClippingRect();
@@ -538,7 +605,57 @@ namespace OpenHardwareMonitor.GUI {
         bool interpolate) {
         if (ActualPoints == null || XAxis == null || YAxis == null)
           return null;
-        return base.GetNearestPoint(point, interpolate);
+
+        // only the sensors of the panel under the mouse (stacked axes)
+        double top = Math.Min(YAxis.ScreenMin.Y, YAxis.ScreenMax.Y);
+        double bottom = Math.Max(YAxis.ScreenMin.Y, YAxis.ScreenMax.Y);
+        if (point.Y < top || point.Y > bottom)
+          return null;
+
+        // OxyPlot takes the point (or interpolated point) nearest on screen,
+        // which can be another time than the one under the mouse: the foot
+        // of an edge below it, when the top of a bar is above the panel.
+        // Take the value at the time of the mouse instead, interpolated or
+        // not: for bars, the one held there (from its point back to the
+        // previous one), else the point nearest in time.
+        double x = XAxis.InverseTransform(point.X);
+        int index = -1;
+        for (int i = 0; i < ActualPoints.Count; i++) {
+          DataPoint p = ActualPoints[i];
+          if (!p.IsDefined())
+            continue;
+          if (index < 0) {
+            index = i;
+            continue;
+          }
+          double best = ActualPoints[index].X;
+          // x is in seconds ago: a bar point holds its value from its x to
+          // the x of the previous point. On a tie with a step corner, keep
+          // the point before it, which holds the value after its x. After
+          // the last point, the last value.
+          if (IsBar ? (p.X <= x ? best > x || p.X > best : best > x && p.X < best) :
+              Math.Abs(p.X - x) < Math.Abs(best - x))
+            index = i;
+        }
+        if (index < 0)
+          return null;
+
+        TrackerHitResult result =
+          base.GetNearestPoint(Transform(ActualPoints[index]), false);
+        if (result == null)
+          return null;
+
+        // OxyPlot picks the series whose position is nearest to the mouse,
+        // and drops a position more than 20 px away from it. The position is
+        // at the mouse when it is between the value and 0 (over the fill),
+        // else on the nearest of them, both kept in the panel: the series
+        // under the mouse wins, the one drawn last when they overlap.
+        double value =Math.Max(top, Math.Min(bottom, result.Position.Y));
+        double baseline = Math.Max(top, Math.Min(bottom, YAxis.Transform(0)));
+        result.Position = new ScreenPoint(point.X,
+          Math.Max(Math.Min(value, baseline),
+            Math.Min(Math.Max(value, baseline), point.Y)));
+        return result;
       }
 
       private void RenderFill(IRenderContext rc, OxyRect clippingRect,
@@ -554,14 +671,21 @@ namespace OpenHardwareMonitor.GUI {
     }
 
     // Item behind each plotted point: the x coordinate is relative to now,
-    // so the tooltip needs the original time of the value.
+    // so the tooltip needs the original time of the value. The point is
+    // drawn at PlotTime, which differs from the time of the value at the
+    // corners of the steps.
     private class PlotValue {
-      public PlotValue(DateTime utcTime, double value) {
+      public PlotValue(DateTime utcTime, double value) :
+        this(utcTime, value, utcTime) { }
+
+      public PlotValue(DateTime utcTime, double value, DateTime plotTime) {
         UtcTime = utcTime;
         Value = value;
+        PlotTime = plotTime;
       }
 
       public DateTime UtcTime { get; }
+      public DateTime PlotTime { get; }
       public DateTime Time { get { return UtcTime.ToLocalTime(); } }
       public double Value { get; }
     }
@@ -718,6 +842,8 @@ namespace OpenHardwareMonitor.GUI {
       }
 
       public bool IsStacked { get; set; }
+      // shows "Paused" in the top right corner of the plot area
+      public bool IsPaused { get; set; }
 
       // OxyPlot's render context draws the text with grayscale antialiasing
       // (AntiAliasGridFit); ClearType, like the rest of the window, is sharper.
@@ -739,6 +865,12 @@ namespace OpenHardwareMonitor.GUI {
 
         if (IsStacked)
           RenderPanels(rc);
+
+        if (IsPaused)
+          rc.DrawText(new ScreenPoint(PlotArea.Right - 6, PlotArea.Top + 4),
+            "Paused", OxyColors.Gray, DefaultFont, DefaultFontSize,
+            FontWeights.Bold, 0, OxyPlot.HorizontalAlignment.Right,
+            OxyPlot.VerticalAlignment.Top);
       }
 
       private void RenderPanels(IRenderContext rc) {

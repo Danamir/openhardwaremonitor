@@ -1,4 +1,4 @@
-/*
+﻿/*
  
   This Source Code Form is subject to the terms of the Mozilla Public
   License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -850,6 +850,7 @@ namespace OpenHardwareMonitor.GUI
                 {
                     lines[sensorNode.Sensor] = new PlotPanel.PlotLine
                     {
+                        Display = sensorNode.LineDisplay,
                         Color = colors[sensorNode.Sensor],
                         Width = sensorNode.LineWidth,
                         Style = sensorNode.LinePattern,
@@ -892,7 +893,7 @@ namespace OpenHardwareMonitor.GUI
                 computer.Accept(updateVisitor);
             });  
             treeView.Invalidate();
-            plotPanel.InvalidatePlot();
+            plotPanel.UpdatePlot();
             systemTray.Redraw();
             if (gadget != null)
                 gadget.Redraw();
@@ -1156,7 +1157,7 @@ namespace OpenHardwareMonitor.GUI
                         item.Click += delegate (object obj, EventArgs args)
                         {
                             if (MessageBox.Show(this,
-                                    "Reset the color, width, style and fill of the line of \"" +
+                                    "Reset the display, color, width, style and fill of the line of \"" +
                                     node.Text + "\" to their defaults?",
                                     "Reset Line", MessageBoxButtons.YesNo,
                                     MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
@@ -1348,6 +1349,7 @@ namespace OpenHardwareMonitor.GUI
 
         private void ShowCustomizeLine(SensorNode node)
         {
+            PlotPanel.LineDisplay initialDisplay = node.LineDisplay;
             Color? initialColor = node.PenColor;
             float initialWidth = node.LineWidth;
             PlotPanel.LinePattern initialStyle = node.LinePattern;
@@ -1359,15 +1361,16 @@ namespace OpenHardwareMonitor.GUI
                 color = initialColor.GetValueOrDefault(Color.Black);
 
             using (CustomizeLineDialog dialog = new CustomizeLineDialog(
-                node.Text, color, initialWidth, initialStyle, initialFill))
+                node.Text, initialDisplay, color, initialWidth, initialStyle, initialFill))
             {
                 // preview on the plot while adjusting; the color is
                 // only stored once picked, the default one otherwise
-                dialog.LineChanged += (s, a) => node.SetLine(
+                dialog.LineChanged += (s, a) => node.SetLine(dialog.LineDisplay,
                     dialog.ColorChanged ? dialog.LineColor : initialColor,
                     dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
                 if (dialog.ShowDialog(this) != DialogResult.OK)
-                    node.SetLine(initialColor, initialWidth, initialStyle, initialFill);
+                    node.SetLine(initialDisplay, initialColor, initialWidth, initialStyle,
+                        initialFill);
             }
         }
 

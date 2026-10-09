@@ -15,7 +15,8 @@ using Cyotek.Windows.Forms;
 
 namespace OpenHardwareMonitor.GUI;
 
-// Customization of a plot line: color, width, dash style and fill opacity.
+// Customization of a plot line: display (line or bars), color, width, dash
+// style and fill opacity.
 // Changes are previewed through LineChanged; the caller restores the initial
 // values when the dialog is cancelled.
 internal sealed class CustomizeLineDialog : Form
@@ -29,6 +30,7 @@ internal sealed class CustomizeLineDialog : Form
     private bool syncingSlider;
 
 
+    private readonly ComboBox displayList;
     private readonly Button colorButton;
     private readonly TrackBar widthSlider;
     private readonly NumericUpDown widthValue;
@@ -36,8 +38,8 @@ internal sealed class CustomizeLineDialog : Form
     private readonly TrackBar fillSlider;
     private readonly NumericUpDown fillValue;
 
-    public CustomizeLineDialog(string sensorName, Color color, float width,
-        PlotPanel.LinePattern pattern, int fillOpacity)
+    public CustomizeLineDialog(string sensorName, PlotPanel.LineDisplay display,
+        Color color, float width, PlotPanel.LinePattern pattern, int fillOpacity)
     {
         Text = "Customize Line - " + sensorName;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -57,6 +59,18 @@ internal sealed class CustomizeLineDialog : Form
             ColumnCount = 4,
             Dock = DockStyle.Fill
         };
+
+        // display
+        displayList = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 220
+        };
+        foreach (PlotPanel.LineDisplay d in Enum.GetValues(typeof(PlotPanel.LineDisplay)))
+            displayList.Items.Add(d);
+        displayList.SelectedItem = display;
+        displayList.SelectedIndexChanged += (sender, e) => OnLineChanged();
+        AddRow(layout, "Display", displayList, null, null);
 
         // color
         colorButton = new Button
@@ -186,6 +200,11 @@ internal sealed class CustomizeLineDialog : Form
         layout.SetColumnSpan(buttons, 4);
 
         Controls.Add(layout);
+    }
+
+    public PlotPanel.LineDisplay LineDisplay
+    {
+        get { return (PlotPanel.LineDisplay)displayList.SelectedItem; }
     }
 
     public Color LineColor

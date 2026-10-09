@@ -26,6 +26,7 @@ public class SensorNode : Node
     private int fillOpacity = 0;
     private float lineWidth = DefaultLineWidth;
     private PlotPanel.LinePattern linePattern = PlotPanel.LinePattern.Solid;
+    private PlotPanel.LineDisplay lineDisplay = PlotPanel.LineDisplay.Line;
 
     public const float DefaultLineWidth = 1;
 
@@ -144,6 +145,9 @@ public class SensorNode : Node
         if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
                 "lineStyle").ToString(), null), out linePattern))
             linePattern = PlotPanel.LinePattern.Solid;
+        if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
+                "lineDisplay").ToString(), null), out lineDisplay))
+            lineDisplay = PlotPanel.LineDisplay.Line;
     }
 
     public override string Text
@@ -199,16 +203,29 @@ public class SensorNode : Node
         get { return linePattern; }
     }
 
+    public PlotPanel.LineDisplay LineDisplay
+    {
+        get { return lineDisplay; }
+    }
+
     // Sets the whole customization of the plot line at once, so the plot is
     // updated only once. The default values aren't stored.
-    public void SetLine(Color? color, float width, PlotPanel.LinePattern pattern, int fill)
+    public void SetLine(PlotPanel.LineDisplay display, Color? color, float width,
+        PlotPanel.LinePattern pattern, int fill)
     {
+        lineDisplay = display;
         penColor = color;
         lineWidth = width;
         linePattern = pattern;
         fillOpacity = fill;
 
-        string id = new Identifier(sensor.Identifier, "penColor").ToString();
+        string id = new Identifier(sensor.Identifier, "lineDisplay").ToString();
+        if (display != PlotPanel.LineDisplay.Line)
+            settings.SetValue(id, display.ToString());
+        else
+            settings.Remove(id);
+
+        id = new Identifier(sensor.Identifier, "penColor").ToString();
         if (color.HasValue)
             settings.SetValue(id, color.Value);
         else
@@ -238,7 +255,8 @@ public class SensorNode : Node
 
     public void ResetLine()
     {
-        SetLine(null, DefaultLineWidth, PlotPanel.LinePattern.Solid, 0);
+        SetLine(PlotPanel.LineDisplay.Line, null, DefaultLineWidth,
+            PlotPanel.LinePattern.Solid, 0);
     }
 
     public bool Plot
