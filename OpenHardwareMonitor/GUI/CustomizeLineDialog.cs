@@ -21,6 +21,11 @@ internal sealed class CustomizeLineDialog : Form
 {
     // width steps of the slider, in pixels
     private const float WidthStep = 0.25f;
+    // fill opacity steps of the slider, in percent
+    private const int FillStep = 5;
+
+    // set while a slider follows its field
+    private bool syncingSlider;
 
 
     private readonly Button colorButton;
@@ -76,7 +81,7 @@ internal sealed class CustomizeLineDialog : Form
         AddRow(layout, "Color", colorButton, null, null);
 
         // width
-        widthSlider = new TrackBar
+        widthSlider = new StepTrackBar
         {
             // 0 hides the line, for example to only show its fill
             Minimum = 0,
@@ -86,7 +91,7 @@ internal sealed class CustomizeLineDialog : Form
             LargeChange = 2,
             Width = 220
         };
-        widthValue = new NumericUpDown
+        widthValue = new StepNumericUpDown
         {
             Minimum = 0m,
             Maximum = 4m,
@@ -99,11 +104,12 @@ internal sealed class CustomizeLineDialog : Form
         widthValue.Value = Math.Max(widthValue.Minimum, Math.Min(widthValue.Maximum, (decimal)width));
         widthSlider.ValueChanged += (sender, e) =>
         {
-            widthValue.Value = (decimal)(widthSlider.Value * WidthStep);
+            if (!syncingSlider)
+                widthValue.Value = (decimal)(widthSlider.Value * WidthStep);
         };
         widthValue.ValueChanged += (sender, e) =>
         {
-            widthSlider.Value = (int)Math.Round((float)widthValue.Value / WidthStep);
+            SyncSlider(widthSlider, (int)Math.Round((float)widthValue.Value / WidthStep));
             styleList.Invalidate();
             OnLineChanged();
         };
@@ -123,31 +129,34 @@ internal sealed class CustomizeLineDialog : Form
         styleList.SelectedIndexChanged += (sender, e) => OnLineChanged();
         AddRow(layout, "Style", styleList, null, null);
 
-        // fill opacity
-        fillSlider = new TrackBar
+        // fill opacity: the slider and the arrows step by FillStep, any value
+        // can be typed
+        fillSlider = new StepTrackBar
         {
             Minimum = 0,
-            Maximum = 100,
-            TickFrequency = 10,
+            Maximum = 100 / FillStep,
+            TickFrequency = 10 / FillStep,
             SmallChange = 1,
-            LargeChange = 10,
-            Value = Math.Max(0, Math.Min(100, fillOpacity)),
+            LargeChange = 2,
             Width = 220
         };
-        fillValue = new NumericUpDown
+        fillValue = new StepNumericUpDown
         {
             Minimum = 0,
             Maximum = 100,
-            Value = fillSlider.Value,
+            Increment = FillStep,
+            Value = Math.Max(0, Math.Min(100, fillOpacity)),
             Width = 60
         };
+        fillSlider.Value = (int)Math.Round(fillValue.Value / FillStep);
         fillSlider.ValueChanged += (sender, e) =>
         {
-            fillValue.Value = fillSlider.Value;
+            if (!syncingSlider)
+                fillValue.Value = fillSlider.Value * FillStep;
         };
         fillValue.ValueChanged += (sender, e) =>
         {
-            fillSlider.Value = (int)fillValue.Value;
+            SyncSlider(fillSlider, (int)Math.Round(fillValue.Value / FillStep));
             OnLineChanged();
         };
         AddRow(layout, "Fill opacity", fillSlider, fillValue, "%");
@@ -191,7 +200,22 @@ internal sealed class CustomizeLineDialog : Form
 
     public int FillOpacity
     {
-        get { return fillSlider.Value; }
+        get { return (int)fillValue.Value; }
+    }
+
+    // Moves a slider to the step nearest to the value typed in its field,
+    // without the slider rounding the value of the field in return
+    private void SyncSlider(TrackBar slider, int step)
+    {
+        syncingSlider = true;
+        try
+        {
+            slider.Value = Math.Max(slider.Minimum, Math.Min(slider.Maximum, step));
+        }
+        finally
+        {
+            syncingSlider = false;
+        }
     }
 
     public event EventHandler LineChanged;
@@ -259,5 +283,57 @@ internal sealed class CustomizeLineDialog : Form
             g.SmoothingMode = smoothing;
         }
         e.DrawFocusRectangle();
+    }
+
+    // Wheel notches in the rotation of a mouse wheel event, the rest being
+    // kept in wheelDelta for the next events (high resolution wheels). Null
+    // when the event was already handled.
+    private static int? WheelSteps(MouseEventArgs e, ref int wheelDelta)
+    {
+        if (e is HandledMouseEventArgs handled)
+        {
+            if (handled.Handled)
+                return null;
+            handled.Handled = true;
+        }
+
+        wheelDelta += e.Delta;
+        int steps = wheelDelta / SystemInformation.MouseWheelScrollDelta;
+        wheelDelta -= steps * SystemInformation.MouseWheelScrollDelta;
+        return steps;
+    }
+
+    // The sliders and numeric fields move by the Windows "lines to scroll"
+    // setting on each mouse wheel notch: move by one step instead
+
+    private sealed class StepTrackBar : TrackBar
+    {
+        private int wheelDelta;
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            int? steps = WheelSteps(e, ref wheelDelta);
+            if (steps.HasValue && steps.Value != 0)
+                Value = Math.Max(Minimum, Math.Min(Maximum, Value + steps.Value * SmallChange));
+        }
+    }
+
+    private sealed class StepNumericUpDown : NumericUpDown
+    {
+        private int wheelDelta;
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            int? steps = WheelSteps(e, ref wheelDelta);
+            if (!steps.HasValue)
+                return;
+            for (int i = 0; i < Math.Abs(steps.Value); i++)
+            {
+                if (steps.Value > 0)
+                    UpButton();
+                else
+                    DownButton();
+            }
+        }
     }
 }
