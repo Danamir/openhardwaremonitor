@@ -531,6 +531,16 @@ namespace OpenHardwareMonitor.GUI {
         base.Render(rc);
       }
 
+      // Every mouse down hit tests the series. A series added by SetSensors
+      // has no points (nor axes) until the next paint updates the model:
+      // OxyPlot would throw on the null point list.
+      public override TrackerHitResult GetNearestPoint(ScreenPoint point,
+        bool interpolate) {
+        if (ActualPoints == null || XAxis == null || YAxis == null)
+          return null;
+        return base.GetNearestPoint(point, interpolate);
+      }
+
       private void RenderFill(IRenderContext rc, OxyRect clippingRect,
         List<ScreenPoint> run, double baseline) {
         if (run.Count < 2)
