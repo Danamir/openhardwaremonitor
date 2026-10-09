@@ -271,14 +271,70 @@ namespace OpenHardwareMonitor.GUI {
       return typeAxes[sensor.SensorType];
     }
 
+    // Appearance of the plot line of a sensor
+    // Dash patterns of the plot lines: OxyPlot's line styles of the same
+    // names, plus our own. Stored by name in the settings.
+    public enum LinePattern {
+      Solid, Dash, Dot, DenseDot, DashDot, DashDotDot, DashDashDot,
+      DashDashDotDot, LongDash, LongDashDot, LongDashDotDot
+    }
+
+    public sealed class PlotLine {
+      public Color Color { get; set; }
+      public float Width { get; set; } = 1;
+      public LinePattern Style { get; set; } = LinePattern.Solid;
+      // in percent, 0 for no fill
+      public int FillOpacity { get; set; }
+    }
+
+    // Line widths below this one get the dash pattern of this width
+    private const double MinDashScaleWidth = 3;
+
+    // GDI+ draws antialiased lines up to 1.5 px wide with the ink of a 1 px
+    // line, so these widths all looked the same. Thinner lines are emulated
+    // with transparency, like antialiasing does: a 1 px line under 1 px, a
+    // 1.75 px line (the first width drawn as is) between 1 and 1.75 px.
+    public static void LinePen(double width, out double penWidth,
+      out double alpha) {
+      if (width >= 1.75) {
+        penWidth = width;
+        alpha = 1;
+      } else if (width <= 1) {
+        penWidth = 1;
+        alpha = Math.Max(0, width);
+      } else {
+        penWidth = 1.75;
+        alpha = width / 1.75;
+      }
+    }
+
+    // Dash pattern of the style for a line of the given width, as given to
+    // the renderers: in multiples of the pen width (never less than 1 for
+    // GDI+). OxyPlot's patterns scale with the width, too short to be seen on
+    // thin lines: scale them as if the line was at least MinDashScaleWidth
+    // wide. Null for a solid line.
+    public static double[] DashPattern(LinePattern pattern, double width) {
+      // dots as long as the pen is wide, separated by as much: not scaled
+      if (pattern == LinePattern.DenseDot)
+        return new[] { 1.0, 1.0 };
+
+      double[] dashes = ((LineStyle)Enum.Parse(typeof(LineStyle),
+        pattern.ToString())).GetDashArray();
+      if (dashes == null)
+        return null;
+      LinePen(width, out double penWidth, out double alpha);
+      double scale = Math.Max(width, MinDashScaleWidth) / Math.Max(penWidth, 1);
+      return dashes.Select(d => d * scale).ToArray();
+    }
+
     public void SetSensors(List<ISensor> sensors,
-      IDictionary<ISensor, Color> colors) {
+      IDictionary<ISensor, PlotLine> lines) {
       this.model.Series.Clear();
 
       HashSet<ViewLinearAxis> usedAxes = new HashSet<ViewLinearAxis>();
 
       foreach (ISensor sensor in sensors) {
-        var series = new LineSeries();
+        var series = new FilledLineSeries();
         if (sensor.SensorType == SensorType.Temperature) {
           series.ItemsSource = sensor.Values.Select(value => new PlotValue(
             value.Time,
@@ -293,8 +349,19 @@ namespace OpenHardwareMonitor.GUI {
           var value = (PlotValue)item;
           return new DataPoint((now - value.UtcTime).TotalSeconds, value.Value);
         };
-        series.Color = colors[sensor].ToOxyColor();
-        series.StrokeThickness = 1;
+        PlotLine line = lines[sensor];
+        OxyColor color = line.Color.ToOxyColor();
+        LinePen(line.Width, out double penWidth, out double alpha);
+        series.Color = OxyColor.FromAColor(
+          (byte)Math.Round(color.A * alpha), color);
+        series.StrokeThickness = penWidth;
+        // the dashes set the pattern
+        series.LineStyle = LineStyle.Solid;
+        series.Dashes = DashPattern(line.Style, line.Width);
+        if (line.FillOpacity > 0)
+          series.Fill = OxyColor.FromAColor(
+            (byte)Math.Round(255 * Math.Min(line.FillOpacity, 100) / 100.0),
+            color);
         var axis = AxisOf(sensor);
         series.YAxisKey = axis.Key;
         series.Title = sensor.Hardware.Name + " - " + sensor.Name;
@@ -438,6 +505,42 @@ namespace OpenHardwareMonitor.GUI {
       return "{0}\n{Value:" + valueFormat + "}" +
         (string.IsNullOrEmpty(unit) || unit == "1" ? "" : " " + unit) +
         " at {Time:HH:mm:ss}";
+    }
+
+    // Line with the area down to 0 optionally filled. OxyPlot's AreaSeries
+    // fills nothing once a value is NaN, like the history gaps of restarts:
+    // fill each run of defined points separately.
+    private class FilledLineSeries : LineSeries {
+      public OxyColor Fill { get; set; } = OxyColors.Undefined;
+
+      public override void Render(IRenderContext rc) {
+        if (Fill.IsVisible()) {
+          OxyRect clippingRect = GetClippingRect();
+          double baseline = YAxis.Transform(0);
+          List<ScreenPoint> run = new List<ScreenPoint>();
+          foreach (DataPoint point in ActualPoints) {
+            if (point.IsDefined()) {
+              run.Add(Transform(point));
+            } else {
+              RenderFill(rc, clippingRect, run, baseline);
+              run.Clear();
+            }
+          }
+          RenderFill(rc, clippingRect, run, baseline);
+        }
+        base.Render(rc);
+      }
+
+      private void RenderFill(IRenderContext rc, OxyRect clippingRect,
+        List<ScreenPoint> run, double baseline) {
+        if (run.Count < 2)
+          return;
+        List<ScreenPoint> polygon = new List<ScreenPoint>(run);
+        polygon.Add(new ScreenPoint(run[run.Count - 1].X, baseline));
+        polygon.Add(new ScreenPoint(run[0].X, baseline));
+        rc.DrawClippedPolygon(clippingRect, polygon, 1, Fill,
+          OxyColors.Undefined, 0);
+      }
     }
 
     // Item behind each plotted point: the x coordinate is relative to now,

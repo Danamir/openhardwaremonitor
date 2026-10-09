@@ -23,6 +23,11 @@ public class SensorNode : Node
     private string fixedFormat;
     private bool plot = false;
     private Color? penColor = null;
+    private int fillOpacity = 0;
+    private float lineWidth = DefaultLineWidth;
+    private PlotPanel.LinePattern linePattern = PlotPanel.LinePattern.Solid;
+
+    public const float DefaultLineWidth = 1;
 
     public string ValueToString(double? value)
     {
@@ -131,6 +136,14 @@ public class SensorNode : Node
         string id = new Identifier(sensor.Identifier, "penColor").ToString();
         if (settings.Contains(id))
             this.PenColor = settings.GetValue(id, Color.Black);
+
+        this.fillOpacity = settings.GetValue(new Identifier(sensor.Identifier,
+            "fillOpacity").ToString(), 0);
+        this.lineWidth = settings.GetValue(new Identifier(sensor.Identifier,
+            "lineWidth").ToString(), DefaultLineWidth);
+        if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
+                "lineStyle").ToString(), null), out linePattern))
+            linePattern = PlotPanel.LinePattern.Solid;
     }
 
     public override string Text
@@ -168,6 +181,64 @@ public class SensorNode : Node
             if (PlotSelectionChanged != null)
                 PlotSelectionChanged(this, null);
         }
+    }
+
+    // Opacity in percent of the area filled under the plot line, 0 for none
+    public int FillOpacity
+    {
+        get { return fillOpacity; }
+    }
+
+    public float LineWidth
+    {
+        get { return lineWidth; }
+    }
+
+    public PlotPanel.LinePattern LinePattern
+    {
+        get { return linePattern; }
+    }
+
+    // Sets the whole customization of the plot line at once, so the plot is
+    // updated only once. The default values aren't stored.
+    public void SetLine(Color? color, float width, PlotPanel.LinePattern pattern, int fill)
+    {
+        penColor = color;
+        lineWidth = width;
+        linePattern = pattern;
+        fillOpacity = fill;
+
+        string id = new Identifier(sensor.Identifier, "penColor").ToString();
+        if (color.HasValue)
+            settings.SetValue(id, color.Value);
+        else
+            settings.Remove(id);
+
+        id = new Identifier(sensor.Identifier, "lineWidth").ToString();
+        if (width != DefaultLineWidth)
+            settings.SetValue(id, width);
+        else
+            settings.Remove(id);
+
+        id = new Identifier(sensor.Identifier, "lineStyle").ToString();
+        if (pattern != PlotPanel.LinePattern.Solid)
+            settings.SetValue(id, pattern.ToString());
+        else
+            settings.Remove(id);
+
+        id = new Identifier(sensor.Identifier, "fillOpacity").ToString();
+        if (fill > 0)
+            settings.SetValue(id, fill);
+        else
+            settings.Remove(id);
+
+        if (PlotSelectionChanged != null)
+            PlotSelectionChanged(this, null);
+    }
+
+    public void ResetLine()
+    {
+        SetLine(null, DefaultLineWidth, PlotPanel.LinePattern.Solid, 0);
     }
 
     public bool Plot

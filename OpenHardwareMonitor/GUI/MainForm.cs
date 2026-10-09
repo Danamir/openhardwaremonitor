@@ -815,8 +815,24 @@ namespace OpenHardwareMonitor.GUI
                     colors.Add(sensorNode.Sensor, sensorNode.PenColor.Value);
             }
 
+            IDictionary<ISensor, PlotPanel.PlotLine> lines = new Dictionary<ISensor, PlotPanel.PlotLine>();
+            foreach (TreeNodeAdv node in treeView.AllNodes)
+            {
+                SensorNode sensorNode = node.Tag as SensorNode;
+                if (sensorNode != null && sensorNode.Plot)
+                {
+                    lines[sensorNode.Sensor] = new PlotPanel.PlotLine
+                    {
+                        Color = colors[sensorNode.Sensor],
+                        Width = sensorNode.LineWidth,
+                        Style = sensorNode.LinePattern,
+                        FillOpacity = sensorNode.FillOpacity
+                    };
+                }
+            }
+
             sensorPlotColors = colors;
-            plotPanel.SetSensors(selected, colors);
+            plotPanel.SetSensors(selected, lines);
         }
 
         private void nodeTextBoxText_EditorShowing(object sender,
@@ -1101,21 +1117,43 @@ namespace OpenHardwareMonitor.GUI
                     }
                     treeContextMenu.Items.Add(new ToolStripSeparator());
                     {
-                        ToolStripMenuItem item = new ToolStripMenuItem("Pen Color...");
+                        ToolStripMenuItem item = new ToolStripMenuItem("Customize Line...");
                         item.Click += delegate (object obj, EventArgs args)
                         {
-                            ColorDialog dialog = new ColorDialog();
-                            dialog.Color = node.PenColor.GetValueOrDefault();
-                            if (dialog.ShowDialog() == DialogResult.OK)
-                                node.PenColor = dialog.Color;
+                            Color? initialColor = node.PenColor;
+                            float initialWidth = node.LineWidth;
+                            PlotPanel.LinePattern initialStyle = node.LinePattern;
+                            int initialFill = node.FillOpacity;
+
+                            // the color shown on the plot, also when it's the default one
+                            Color color;
+                            if (!sensorPlotColors.TryGetValue(node.Sensor, out color))
+                                color = initialColor.GetValueOrDefault(Color.Black);
+
+                            using (CustomizeLineDialog dialog = new CustomizeLineDialog(
+                                node.Text, color, initialWidth, initialStyle, initialFill))
+                            {
+                                // preview on the plot while adjusting; the color is
+                                // only stored once picked, the default one otherwise
+                                dialog.LineChanged += (s, a) => node.SetLine(
+                                    dialog.ColorChanged ? dialog.LineColor : initialColor,
+                                    dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
+                                if (dialog.ShowDialog(this) != DialogResult.OK)
+                                    node.SetLine(initialColor, initialWidth, initialStyle, initialFill);
+                            }
                         };
                         treeContextMenu.Items.Add(item);
                     }
                     {
-                        ToolStripMenuItem item = new ToolStripMenuItem("Reset Pen Color");
+                        ToolStripMenuItem item = new ToolStripMenuItem("Reset Line");
                         item.Click += delegate (object obj, EventArgs args)
                         {
-                            node.PenColor = null;
+                            if (MessageBox.Show(this,
+                                    "Reset the color, width, style and fill of the line of \"" +
+                                    node.Text + "\" to their defaults?",
+                                    "Reset Line", MessageBoxButtons.YesNo,
+                                    MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                                node.ResetLine();
                         };
                         treeContextMenu.Items.Add(item);
                     }
