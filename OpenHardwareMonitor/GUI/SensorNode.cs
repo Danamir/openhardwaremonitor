@@ -41,14 +41,33 @@ public class SensorNode : Node
                     else
                         return string.Format("{0:F1} MB/s", value);
                 case SensorType.TimeSpan:
-                    TimeSpan s = TimeSpan.FromSeconds(value.Value);
-                    return s.ToString("g");
+                    return FormatDuration(TimeSpan.FromSeconds(value.Value));
                 default:
                     return string.Format(fixedFormat, value);
             }
         }
         else
             return "-";
+    }
+
+    // In the style of Go durations, limited to 3 separators (units and decimal
+    // separator) from the largest unit: 5d07h13m, 2h11m35s, 11m35.05s, 7.50s.
+    // The units after the first one are zero padded, so the values keep their
+    // width. Truncated rather than rounded, not to show 60s or 60m.
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.Days > 0)
+            return duration.Days + "d" + duration.Hours.ToString("00") + "h" +
+                duration.Minutes.ToString("00") + "m";
+        if (duration.Hours > 0)
+            return duration.Hours + "h" + duration.Minutes.ToString("00") + "m" +
+                duration.Seconds.ToString("00") + "s";
+
+        double seconds = Math.Floor(
+            (duration.Ticks % TimeSpan.TicksPerMinute) / (TimeSpan.TicksPerSecond / 100.0)) / 100;
+        if (duration.Minutes > 0)
+            return duration.Minutes + "m" + seconds.ToString("00.00") + "s";
+        return seconds.ToString("0.00") + "s";
     }
 
     public string Format
