@@ -74,7 +74,11 @@ namespace OpenHardwareMonitor.Hardware {
     void ResetMin();
     void ResetMax();
 
+    // averages of 4 updates, over the last day
     IEnumerable<SensorValue> Values { get; }
+
+    // Values, with every update instead of the averages over the last hour
+    IEnumerable<SensorValue> DetailedValues { get; }
 
     IControl Control { get; }
   }

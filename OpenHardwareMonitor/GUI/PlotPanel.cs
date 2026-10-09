@@ -354,18 +354,21 @@ namespace OpenHardwareMonitor.GUI {
       foreach (ISensor sensor in sensors) {
         PlotLine line = lines[sensor];
         var series = new FilledLineSeries();
+        series.IsBar = line.Display == LineDisplay.Bar;
+        // bars show every update of the last hour, lines the averages of 4
+        IEnumerable<SensorValue> history =
+          series.IsBar ? sensor.DetailedValues : sensor.Values;
         IEnumerable<PlotValue> values;
         if (sensor.SensorType == SensorType.Temperature) {
-          values = sensor.Values.Select(value => new PlotValue(
+          values = history.Select(value => new PlotValue(
             value.Time,
             unitManager.TemperatureUnit == TemperatureUnit.Celsius ?
               value.Value : UnitManager.CelsiusToFahrenheit(value.Value).Value
           ));
         } else {
-          values = sensor.Values.Select(value => new PlotValue(
+          values = history.Select(value => new PlotValue(
             value.Time, value.Value));
         }
-        series.IsBar = line.Display == LineDisplay.Bar;
         if (series.IsBar) {
           series.Values = Steps(values);
           // OxyPlot skips the points closer than MinimumSegmentLength (2 px)

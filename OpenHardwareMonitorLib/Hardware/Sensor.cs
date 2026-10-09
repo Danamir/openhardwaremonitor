@@ -31,6 +31,11 @@ namespace OpenHardwareMonitor.Hardware {
     private double? maxValue;
     private readonly RingCollection<SensorValue> 
       values = new RingCollection<SensorValue>();
+    // every update over the last RecentHistory, where values only has the
+    // averages of 4 updates
+    private readonly RingCollection<SensorValue>
+      recentValues = new RingCollection<SensorValue>();
+    private static readonly TimeSpan RecentHistory = TimeSpan.FromHours(1);
     private readonly ISettings settings;
     private IControl control;
     
@@ -74,7 +79,17 @@ namespace OpenHardwareMonitor.Hardware {
     }
 
     private void SetSensorValuesToSettings() {
-      if (values.Count == 0) {
+      SetValuesToSettings(values, "values");
+      SetValuesToSettings(recentValues, "recentValues");
+    }
+
+    private void SetValuesToSettings(RingCollection<SensorValue> ring,
+      string key) {
+      string id = new Identifier(Identifier, key).ToString();
+      if (ring.Count == 0) {
+        // not to read an old history at the next start
+        if (ring == recentValues)
+          settings.Remove(id);
         return;
       }
       using (MemoryStream m = new MemoryStream()) {
@@ -82,7 +97,7 @@ namespace OpenHardwareMonitor.Hardware {
         using (BufferedStream b = new BufferedStream(c, 65536))
         using (BinaryWriter writer = new BinaryWriter(b)) {
           long t = 0;
-          foreach (SensorValue sensorValue in values) {
+          foreach (SensorValue sensorValue in ring) {
             long v = sensorValue.Time.ToBinary();
             writer.Write(v - t);
             t = v;
@@ -90,13 +105,26 @@ namespace OpenHardwareMonitor.Hardware {
           }
           writer.Flush();
         }
-        settings.SetValue(new Identifier(Identifier, "values").ToString(),
-          Convert.ToBase64String(m.ToArray()));
+        settings.SetValue(id, Convert.ToBase64String(m.ToArray()));
       }
     }
 
     private void GetSensorValuesFromSettings() {
-      string name = new Identifier(Identifier, "values").ToString();
+      DateTime now = DateTime.UtcNow;
+      GetValuesFromSettings(values, "values", DateTime.MinValue);
+      GetValuesFromSettings(recentValues, "recentValues", now - RecentHistory);
+
+      // gap of the restart
+      if (values.Count > 0)
+        AppendValue(values, float.NaN, now);
+      if (recentValues.Count > 0)
+        AppendValue(recentValues, float.NaN, now);
+    }
+
+    // Reads the saved values from the given time on
+    private void GetValuesFromSettings(RingCollection<SensorValue> ring,
+      string key, DateTime from) {
+      string name = new Identifier(Identifier, key).ToString();
       string s = settings.GetValue(name, null);
 
       if (s == null) {
@@ -124,9 +152,10 @@ namespace OpenHardwareMonitor.Hardware {
             DateTime time = DateTime.FromBinary(t);
             if (time > now)
               break;
-            // must match SetSensorValuesToSettings, which writes doubles
+            // must match SetValuesToSettings, which writes doubles
             double value = reader.ReadDouble();
-            AppendValue(value, time);
+            if (time >= from)
+              AppendValue(ring, value, time);
           }
         } catch (EndOfStreamException) {
         } catch (ArgumentException) {
@@ -135,21 +164,20 @@ namespace OpenHardwareMonitor.Hardware {
 
       }
 
-      if (values.Count > 0)
-        AppendValue(float.NaN, DateTime.UtcNow);
-
       // remove the value string from the settings to reduce memory usage
       settings.Remove(name);
     }
 
-    private void AppendValue(double value, DateTime time) {
-      if (values.Count >= 2 && values.Last.Value == value && 
-        values[values.Count - 2].Value == value) {
-        values.Last = new SensorValue(value, time);
+    // A run of identical values keeps only its first and last points
+    private static void AppendValue(RingCollection<SensorValue> ring,
+      double value, DateTime time) {
+      if (ring.Count >= 2 && ring.Last.Value == value &&
+        ring[ring.Count - 2].Value == value) {
+        ring.Last = new SensorValue(value, time);
         return;
-      } 
+      }
 
-      values.Append(new SensorValue(value, time));
+      ring.Append(new SensorValue(value, time));
     }
 
     public IHardware Hardware {
@@ -201,12 +229,16 @@ namespace OpenHardwareMonitor.Hardware {
         DateTime now = DateTime.UtcNow;
         while (values.Count > 0 && (now - values.First.Time).TotalDays > 1)
           values.Remove();
+        while (recentValues.Count > 0 &&
+          now - recentValues.First.Time > RecentHistory)
+          recentValues.Remove();
 
         if (value.HasValue) {
+          AppendValue(recentValues, value.Value, now);
           sum += value.Value;
           count++;
           if (count == 4) {
-            AppendValue(sum / count, now);
+            AppendValue(values, sum / count, now);
             sum = 0;
             count = 0;
           }
@@ -234,6 +266,21 @@ namespace OpenHardwareMonitor.Hardware {
     public IEnumerable<SensorValue> Values {
       get { return values; }
     }    
+
+    public IEnumerable<SensorValue> DetailedValues {
+      get {
+        // the averages until the first detailed value
+        DateTime start = recentValues.Count > 0 ?
+          recentValues.First.Time : DateTime.MaxValue;
+        foreach (SensorValue value in values) {
+          if (value.Time >= start)
+            break;
+          yield return value;
+        }
+        foreach (SensorValue value in recentValues)
+          yield return value;
+      }
+    }
 
     public void Accept(IVisitor visitor) {
       if (visitor == null)
