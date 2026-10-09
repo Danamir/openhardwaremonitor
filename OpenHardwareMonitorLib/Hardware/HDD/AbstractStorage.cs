@@ -22,7 +22,9 @@ using OpenHardwareMonitorLib;
 namespace OpenHardwareMonitor.Hardware.HDD {
   internal abstract class AbstractStorage : Hardware {
 
-    private const int UPDATE_DIVIDER = 5; // update only every 30s
+    // SMART and used space only every 5 updates; the performance counters
+    // (throughput, active time) at every update
+    private const int UPDATE_DIVIDER = 5;
     private const double BYTES_TO_GIGABYTES = 1.0 / (1024 * 1024 * 1024);
     private const double BYTES_TO_MEGABYTES = 1.0 / (1024 * 1024);
 
@@ -200,7 +202,11 @@ namespace OpenHardwareMonitor.Hardware.HDD {
       get { return HardwareType.Storage; }
     }
 
+    // SMART values, every UPDATE_DIVIDER updates
     protected virtual void UpdateSensors() {
+    }
+
+    private void UpdatePerformanceSensors() {
       if (performanceSensors.Count > 0) {
         var newValues = smart.ReadThroughputValues();
         if (newValues != null) {
@@ -213,6 +219,8 @@ namespace OpenHardwareMonitor.Hardware.HDD {
     }
 
     public override void Update() {
+      UpdatePerformanceSensors();
+
       if (count == 0) {
         UpdateSensors();
 
