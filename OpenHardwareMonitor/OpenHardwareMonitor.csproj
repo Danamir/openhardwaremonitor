@@ -38,6 +38,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.9.1" />
+    <PackageReference Include="Cyotek.Windows.Forms.ColorPicker" Version="2.0.0-beta.7" />
     <PackageReference Include="NLog" Version="6.0.5" />
     <PackageReference Include="NLog.Extensions.Logging" Version="6.0.5" />
     <PackageReference Include="NLog.OutputDebugString" Version="6.0.5" />

@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Windows.Forms;
+using Cyotek.Windows.Forms;
 
 namespace OpenHardwareMonitor.GUI;
 
@@ -67,15 +68,22 @@ internal sealed class CustomizeLineDialog : Form
         };
         colorButton.Click += (sender, e) =>
         {
-            using (ColorDialog dialog = new ColorDialog { Color = colorButton.BackColor, FullOpen = true })
+            Color previousColor = colorButton.BackColor;
+            bool previousColorChanged = ColorChanged;
+            using (ColorPickerDialog dialog = new ColorPickerDialog
             {
+                Color = previousColor,
+                ShowAlphaChannel = false,
+                ShowLoad = false,
+                ShowSave = false
+            })
+            {
+                // preview on the plot while picking, like the other fields
+                dialog.PreviewColorChanged += (s, a) => SetColor(dialog.Color, true);
                 if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    colorButton.BackColor = dialog.Color;
-                    ColorChanged = true;
-                    styleList.Invalidate();
-                    OnLineChanged();
-                }
+                    SetColor(dialog.Color, true);
+                else
+                    SetColor(previousColor, previousColorChanged);
             }
         };
         AddRow(layout, "Color", colorButton, null, null);
@@ -219,6 +227,16 @@ internal sealed class CustomizeLineDialog : Form
     }
 
     public event EventHandler LineChanged;
+
+    private void SetColor(Color color, bool changed)
+    {
+        if (colorButton.BackColor == color && ColorChanged == changed)
+            return;
+        colorButton.BackColor = color;
+        ColorChanged = changed;
+        styleList.Invalidate();
+        OnLineChanged();
+    }
 
     private void OnLineChanged()
     {
