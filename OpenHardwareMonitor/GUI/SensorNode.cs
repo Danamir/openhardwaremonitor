@@ -25,6 +25,10 @@ public class SensorNode : Node
     private bool plot = false;
     private Color? penColor = null;
     private PlotPanel.LineDisplay lineDisplay = PlotPanel.LineDisplay.Line;
+    private int lineAveraging = DefaultLineAveraging;
+
+    // the stored averages of 4 updates
+    public const int DefaultLineAveraging = 4;
     // width, style and fill of each display, kept when switching between
     // them; the color is shared
     private readonly Dictionary<PlotPanel.LineDisplay, PlotPanel.PlotLine> lines =
@@ -152,6 +156,9 @@ public class SensorNode : Node
         if (!Enum.TryParse(settings.GetValue(new Identifier(sensor.Identifier,
                 "lineDisplay").ToString(), null), out lineDisplay))
             lineDisplay = PlotPanel.LineDisplay.Line;
+        lineAveraging = Math.Max(1, Math.Min(DefaultLineAveraging,
+            settings.GetValue(new Identifier(sensor.Identifier,
+                "lineAveraging").ToString(), DefaultLineAveraging)));
     }
 
     public override string Text
@@ -250,6 +257,22 @@ public class SensorNode : Node
         get { return lineDisplay; }
     }
 
+    // Seconds the line averages over, 1 to 4 (see PlotPanel.PlotLine). The
+    // plot is updated by the next SetLine or SetLines.
+    public int LineAveraging
+    {
+        get { return lineAveraging; }
+        set
+        {
+            lineAveraging = value;
+            string id = new Identifier(sensor.Identifier, "lineAveraging").ToString();
+            if (value != DefaultLineAveraging)
+                settings.SetValue(id, value);
+            else
+                settings.Remove(id);
+        }
+    }
+
     // Sets the display, the color, and the width, style and fill of that
     // display at once, so the plot is updated only once. The default values
     // aren't stored.
@@ -319,6 +342,7 @@ public class SensorNode : Node
 
     public void ResetLine()
     {
+        LineAveraging = DefaultLineAveraging;
         SetLines(PlotPanel.LineDisplay.Line, null,
             lines.Keys.ToList().Select(DefaultLine));
     }

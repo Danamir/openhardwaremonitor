@@ -34,6 +34,7 @@ internal sealed class CustomizeLineDialog : Form
 
 
     private readonly ComboBox displayList;
+    private readonly ComboBox averagingList;
     private readonly Button colorButton;
     private readonly TrackBar widthSlider;
     private readonly NumericUpDown widthValue;
@@ -42,7 +43,7 @@ internal sealed class CustomizeLineDialog : Form
     private readonly NumericUpDown fillValue;
 
     public CustomizeLineDialog(string sensorName, PlotPanel.LineDisplay display,
-        Color color, Func<PlotPanel.LineDisplay, PlotPanel.PlotLine> getLine)
+        int averaging, Color color, Func<PlotPanel.LineDisplay, PlotPanel.PlotLine> getLine)
     {
         PlotPanel.PlotLine line = getLine(display);
         float width = line.Width;
@@ -93,9 +94,25 @@ internal sealed class CustomizeLineDialog : Form
             {
                 loadingDisplay = false;
             }
+            averagingList.Enabled = LineDisplay == PlotPanel.LineDisplay.Line;
             OnLineChanged();
         };
         AddRow(layout, "Display", displayList, null, null);
+
+        // seconds the line averages over, item i for i + 1 s; below 4 s, only
+        // over the last hour. The bars show every update.
+        averagingList = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 220,
+            Enabled = display == PlotPanel.LineDisplay.Line
+        };
+        averagingList.Items.AddRange(new object[] {
+            "1 s (every update, last hour)", "2 s (last hour)",
+            "3 s (last hour)", "4 s" });
+        averagingList.SelectedIndex = Math.Max(1, Math.Min(4, averaging)) - 1;
+        averagingList.SelectedIndexChanged += (sender, e) => OnLineChanged();
+        AddRow(layout, "Averaging", averagingList, null, null);
 
         // color
         colorButton = new Button
@@ -230,6 +247,12 @@ internal sealed class CustomizeLineDialog : Form
     public PlotPanel.LineDisplay LineDisplay
     {
         get { return (PlotPanel.LineDisplay)displayList.SelectedItem; }
+    }
+
+    // seconds, for the line only
+    public int LineAveraging
+    {
+        get { return averagingList.SelectedIndex + 1; }
     }
 
     public Color LineColor

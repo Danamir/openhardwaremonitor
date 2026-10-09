@@ -851,6 +851,7 @@ namespace OpenHardwareMonitor.GUI
                     lines[sensorNode.Sensor] = new PlotPanel.PlotLine
                     {
                         Display = sensorNode.LineDisplay,
+                        Averaging = sensorNode.LineAveraging,
                         Color = colors[sensorNode.Sensor],
                         Width = sensorNode.LineWidth,
                         Style = sensorNode.LinePattern,
@@ -1157,7 +1158,7 @@ namespace OpenHardwareMonitor.GUI
                         item.Click += delegate (object obj, EventArgs args)
                         {
                             if (MessageBox.Show(this,
-                                    "Reset the display and the color, width, style and fill of the line and bars of \"" +
+                                    "Reset the display and the color, width, style, fill and averaging of the line and bars of \"" +
                                     node.Text + "\" to their defaults?",
                                     "Reset Line", MessageBoxButtons.YesNo,
                                     MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
@@ -1350,6 +1351,7 @@ namespace OpenHardwareMonitor.GUI
         private void ShowCustomizeLine(SensorNode node)
         {
             PlotPanel.LineDisplay initialDisplay = node.LineDisplay;
+            int initialAveraging = node.LineAveraging;
             Color? initialColor = node.PenColor;
             // all the displays, the dialog can switch between them
             List<PlotPanel.PlotLine> initialLines = Enum.GetValues(typeof(PlotPanel.LineDisplay))
@@ -1361,15 +1363,22 @@ namespace OpenHardwareMonitor.GUI
                 color = initialColor.GetValueOrDefault(Color.Black);
 
             using (CustomizeLineDialog dialog = new CustomizeLineDialog(
-                node.Text, initialDisplay, color, node.GetLine))
+                node.Text, initialDisplay, initialAveraging, color, node.GetLine))
             {
                 // preview on the plot while adjusting; the color is
                 // only stored once picked, the default one otherwise
-                dialog.LineChanged += (s, a) => node.SetLine(dialog.LineDisplay,
-                    dialog.ColorChanged ? dialog.LineColor : initialColor,
-                    dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
+                dialog.LineChanged += (s, a) =>
+                {
+                    node.LineAveraging = dialog.LineAveraging;
+                    node.SetLine(dialog.LineDisplay,
+                        dialog.ColorChanged ? dialog.LineColor : initialColor,
+                        dialog.LineWidth, dialog.LinePattern, dialog.FillOpacity);
+                };
                 if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    node.LineAveraging = initialAveraging;
                     node.SetLines(initialDisplay, initialColor, initialLines);
+                }
             }
         }
 

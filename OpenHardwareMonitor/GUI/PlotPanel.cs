@@ -303,6 +303,10 @@ namespace OpenHardwareMonitor.GUI {
       public LinePattern Style { get; set; } = LinePattern.Solid;
       // in percent, 0 for no fill
       public int FillOpacity { get; set; }
+      // seconds the line averages over: 4 for the stored averages of 4
+      // updates, less for the updates of the last hour (1 for none). The
+      // bars show every update.
+      public int Averaging { get; set; } = 4;
     }
 
     // Line widths below this one get the dash pattern of this width
@@ -355,9 +359,8 @@ namespace OpenHardwareMonitor.GUI {
         PlotLine line = lines[sensor];
         var series = new FilledLineSeries();
         series.IsBar = line.Display == LineDisplay.Bar;
-        // bars show every update of the last hour, lines the averages of 4
-        IEnumerable<SensorValue> history =
-          series.IsBar ? sensor.DetailedValues : sensor.Values;
+        IEnumerable<SensorValue> history = series.IsBar ?
+          History(sensor, 1) : History(sensor, line.Averaging);
         IEnumerable<PlotValue> values;
         if (sensor.SensorType == SensorType.Temperature) {
           values = history.Select(value => new PlotValue(
@@ -406,6 +409,82 @@ namespace OpenHardwareMonitor.GUI {
 
       UpdateAxesPosition();
       InvalidatePlot();
+    }
+
+    // Values of a sensor as plotted: the stored averages of 4 updates, or
+    // for less averaging, the updates of the last hour averaged over that
+    // many seconds (the stored averages before). Lazy, like the history.
+    private static IEnumerable<SensorValue> History(ISensor sensor,
+      int averaging) {
+      if (averaging >= 4) {
+        foreach (SensorValue value in sensor.Values)
+          yield return value;
+        yield break;
+      }
+
+      List<SensorValue> recent = sensor.RecentValues.ToList();
+      DateTime start = recent.Count > 0 ? recent[0].Time : DateTime.MaxValue;
+      foreach (SensorValue value in sensor.Values) {
+        if (value.Time >= start)
+          break;
+        yield return value;
+      }
+      IEnumerable<SensorValue> detail = averaging > 1 ?
+        MovingAverage(recent, TimeSpan.FromSeconds(averaging)) : recent;
+      foreach (SensorValue value in detail)
+        yield return value;
+    }
+
+    // Average of the values over the window before each point. Each value
+    // holds from the previous point to its own one, as it is measured since
+    // the previous update; a run of identical values only has its first and
+    // last points.
+    private static IEnumerable<SensorValue> MovingAverage(
+      IEnumerable<SensorValue> values, TimeSpan window) {
+      List<(DateTime Start, DateTime End, double Value)> held =
+        new List<(DateTime Start, DateTime End, double Value)>();
+      SensorValue? previous = null;
+      foreach (SensorValue value in values) {
+        if (double.IsNaN(value.Value) || !previous.HasValue ||
+          double.IsNaN(previous.Value.Value)) {
+          // nothing before it to average with
+          held.Clear();
+          previous = value;
+          yield return value;
+          continue;
+        }
+
+        DateTime start = previous.Value.Time;
+        held.Add((start, value.Time, value.Value));
+        previous = value;
+        // a long run: the average reaches its value once the window is in it
+        if (value.Time - start > window)
+          yield return new SensorValue(value.Value, start + window);
+        yield return new SensorValue(Average(held, value.Time, window),
+          value.Time);
+
+        while (held.Count > 0 && held[0].End <= value.Time - window)
+          held.RemoveAt(0);
+      }
+    }
+
+    // Time weighted average of the held values over the window before time
+    private static double Average(
+      List<(DateTime Start, DateTime End, double Value)> held, DateTime time,
+      TimeSpan window) {
+      DateTime from = time - window;
+      double sum = 0;
+      double duration = 0;
+      foreach ((DateTime Start, DateTime End, double Value) value in held) {
+        DateTime start = value.Start > from ? value.Start : from;
+        DateTime end = value.End < time ? value.End : time;
+        double seconds = (end - start).TotalSeconds;
+        if (seconds > 0) {
+          sum += seconds * value.Value;
+          duration += seconds;
+        }
+      }
+      return duration > 0 ? sum / duration : held[held.Count - 1].Value;
     }
 
     // Values as a step line: each value is held from the previous point to

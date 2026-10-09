@@ -267,19 +267,8 @@ namespace OpenHardwareMonitor.Hardware {
       get { return values; }
     }    
 
-    public IEnumerable<SensorValue> DetailedValues {
-      get {
-        // the averages until the first detailed value
-        DateTime start = recentValues.Count > 0 ?
-          recentValues.First.Time : DateTime.MaxValue;
-        foreach (SensorValue value in values) {
-          if (value.Time >= start)
-            break;
-          yield return value;
-        }
-        foreach (SensorValue value in recentValues)
-          yield return value;
-      }
+    public IEnumerable<SensorValue> RecentValues {
+      get { return recentValues; }
     }
 
     public void Accept(IVisitor visitor) {

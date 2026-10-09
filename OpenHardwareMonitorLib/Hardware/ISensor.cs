@@ -77,8 +77,8 @@ namespace OpenHardwareMonitor.Hardware {
     // averages of 4 updates, over the last day
     IEnumerable<SensorValue> Values { get; }
 
-    // Values, with every update instead of the averages over the last hour
-    IEnumerable<SensorValue> DetailedValues { get; }
+    // every update, over the last hour
+    IEnumerable<SensorValue> RecentValues { get; }
 
     IControl Control { get; }
   }
