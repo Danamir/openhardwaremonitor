@@ -662,22 +662,35 @@ namespace OpenHardwareMonitor.GUI {
         base.UpdateData();
       }
 
+      // The series are rendered one after the other: the fill of a series
+      // would cover the lines of the previous ones. The first series renders
+      // the fills of all of them, then each series only its line.
       public override void Render(IRenderContext rc) {
-        if (Fill.IsVisible()) {
-          OxyRect clippingRect = GetClippingRect();
-          double baseline = YAxis.Transform(0);
-          List<ScreenPoint> run = new List<ScreenPoint>();
-          foreach (DataPoint point in ActualPoints) {
-            if (point.IsDefined()) {
-              run.Add(Transform(point));
-            } else {
-              RenderFill(rc, clippingRect, run, baseline);
-              run.Clear();
-            }
-          }
-          RenderFill(rc, clippingRect, run, baseline);
+        List<FilledLineSeries> series = PlotModel.Series
+          .OfType<FilledLineSeries>().Where(s => s.IsVisible).ToList();
+        if (series.Count > 0 && series[0] == this) {
+          foreach (FilledLineSeries s in series)
+            s.RenderFills(rc);
         }
         base.Render(rc);
+      }
+
+      private void RenderFills(IRenderContext rc) {
+        if (!Fill.IsVisible() || ActualPoints == null || XAxis == null ||
+          YAxis == null)
+          return;
+        OxyRect clippingRect = GetClippingRect();
+        double baseline = YAxis.Transform(0);
+        List<ScreenPoint> run = new List<ScreenPoint>();
+        foreach (DataPoint point in ActualPoints) {
+          if (point.IsDefined()) {
+            run.Add(Transform(point));
+          } else {
+            RenderFill(rc, clippingRect, run, baseline);
+            run.Clear();
+          }
+        }
+        RenderFill(rc, clippingRect, run, baseline);
       }
 
       // Every mouse down hit tests the series. A series added by SetSensors
