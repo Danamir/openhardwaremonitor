@@ -83,6 +83,9 @@ namespace OpenHardwareMonitor.GUI
 
         private bool selectionDragging = false;
 
+        private System.Windows.Forms.Timer deviceChangeTimer;
+        private DeviceNotification.DeviceKind changedDevices;
+
         public MainForm()
         {
             InitializeComponent();
@@ -1282,10 +1285,8 @@ namespace OpenHardwareMonitor.GUI
                 switch ((int)m.WParam)
                 {
                     case DeviceNotification.DbtDeviceArrival:
-                        BeginInvoke(new Action<bool>(DeviceChanged), true); // this is where you do your magic
-                        break;
                     case DeviceNotification.DbtDeviceRemoveComplete:
-                        BeginInvoke(new Action<bool>(DeviceChanged), false); // this is where you do your magic
+                        DeviceChanged(DeviceNotification.GetDeviceKind(m.LParam));
                         break;
                 }
             }
@@ -1316,18 +1317,41 @@ namespace OpenHardwareMonitor.GUI
             }
         }
 
-        private void DeviceChanged(bool added)
+        private void DeviceChanged(DeviceNotification.DeviceKind kind)
         {
+            if (kind == DeviceNotification.DeviceKind.None)
+                return;
+
+            // A device change comes as a burst of messages (one per interface,
+            // arrival then removal...), and reopening a group takes seconds:
+            // reopen once, after the burst
+            changedDevices |= kind;
+            if (deviceChangeTimer == null)
+            {
+                deviceChangeTimer = new System.Windows.Forms.Timer(components);
+                deviceChangeTimer.Interval = 2000;
+                deviceChangeTimer.Tick += deviceChangeTimer_Tick;
+            }
+            deviceChangeTimer.Stop();
+            deviceChangeTimer.Start();
+        }
+
+        private void deviceChangeTimer_Tick(object sender, EventArgs e)
+        {
+            deviceChangeTimer.Stop();
+            DeviceNotification.DeviceKind kind = changedDevices;
+            changedDevices = DeviceNotification.DeviceKind.None;
+
             // Swapping these will re-query the list of devices
             if (computer != null)
             {
-                if (computer.NetworkEnabled)
+                if (kind.HasFlag(DeviceNotification.DeviceKind.Network) && computer.NetworkEnabled)
                 {
                     computer.NetworkEnabled = false;
                     computer.NetworkEnabled = true;
                 }
 
-                if (computer.HDDEnabled)
+                if (kind.HasFlag(DeviceNotification.DeviceKind.Storage) && computer.HDDEnabled)
                 {
                     computer.HDDEnabled = false;
                     computer.HDDEnabled = true;

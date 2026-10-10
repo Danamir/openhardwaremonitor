@@ -34,6 +34,7 @@ Bugs of the upstream version, fixed in this fork:
 - The sensor history was saved but never restored at startup.
 - The plot's time window and zoom were saved as empty values, so they were lost at each restart.
 - The app hung at startup when an older version was running.
+- The app froze when any device was plugged or unplugged, e.g. a game controller disconnecting: each notification reopened the drives and network adapters. It now reacts only to drives and network adapters, once per burst of notifications.
 - NVIDIA: the PCIe throughput was 1024 times too high, and the GPU memory load shared its settings and history with the GPU bus load.
 - The drives' read and write active times were fractions shown as percents.
 

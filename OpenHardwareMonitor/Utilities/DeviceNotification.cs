@@ -15,38 +15,77 @@ namespace OpenHardwareMonitor.Utilities {
     public const int DbtDeviceRemoveComplete = 0x8004; // device is gone     
     public const int DbtDevNodesChanged = 0x0007; //A device has been added to or removed from the system.
 
-    public const int WmDevicechange = 0x0219; // device change event      
+    public const int WmDevicechange = 0x0219; // device change event
+    private const int DbtDevtypVolume = 2;
     private const int DbtDevtypDeviceinterface = 5;
-    //https://msdn.microsoft.com/en-us/library/aa363431(v=vs.85).aspx
-    private const int DEVICE_NOTIFY_ALL_INTERFACE_CLASSES = 4;
-    private static readonly Guid GuidDevinterfaceUSBDevice = new Guid("A5DCBF10-6530-11D2-901F-00C04FB951ED"); // USB devices
-    private static IntPtr notificationHandle;
+    private static readonly Guid GuidDevinterfaceDisk = new Guid("53F56307-B6BF-11D0-94F2-00A0C91EFB8B");
+    private static readonly Guid GuidDevinterfaceVolume = new Guid("53F5630D-B6BF-11D0-94F2-00A0C91EFB8B");
+    private static readonly Guid GuidDevinterfaceNet = new Guid("CAC88484-7515-4C03-82E6-71A87ABAC361");
+    private static readonly List<IntPtr> notificationHandles = new List<IntPtr>();
+
+    [Flags]
+    public enum DeviceKind {
+      None = 0,
+      Storage = 1,
+      Network = 2
+    }
 
     /// <summary>
-    /// Registers a window to receive notifications when devices are plugged or unplugged.
+    /// Registers a window to receive notifications when disks, volumes or
+    /// network adapters are added or removed. Other devices (game controllers,
+    /// HID, audio...) are ignored: each notification reopens hardware groups.
     /// </summary>
     /// <param name="windowHandle">Handle to the window receiving notifications.</param>
-    /// <param name="usbOnly">true to filter to USB devices only, false to be notified for all devices.</param>
-    public static void RegisterDeviceNotification(IntPtr windowHandle, bool usbOnly = false) {
-      var dbi = new DevBroadcastDeviceinterface {
-        DeviceType = DbtDevtypDeviceinterface,
-        Reserved = 0,
-        ClassGuid = GuidDevinterfaceUSBDevice,
-        Name = 0
-      };
+    public static void RegisterDeviceNotification(IntPtr windowHandle) {
+      foreach (Guid classGuid in new[] { GuidDevinterfaceDisk, GuidDevinterfaceVolume, GuidDevinterfaceNet }) {
+        var dbi = new DevBroadcastDeviceinterface {
+          DeviceType = DbtDevtypDeviceinterface,
+          Reserved = 0,
+          ClassGuid = classGuid,
+          Name = 0
+        };
 
-      dbi.Size = Marshal.SizeOf(dbi);
-      IntPtr buffer = Marshal.AllocHGlobal(dbi.Size);
-      Marshal.StructureToPtr(dbi, buffer, true);
-
-      notificationHandle = RegisterDeviceNotification(windowHandle, buffer, usbOnly ? 0 : DEVICE_NOTIFY_ALL_INTERFACE_CLASSES);
+        dbi.Size = Marshal.SizeOf(dbi);
+        IntPtr buffer = Marshal.AllocHGlobal(dbi.Size);
+        try {
+          Marshal.StructureToPtr(dbi, buffer, false);
+          IntPtr handle = RegisterDeviceNotification(windowHandle, buffer, 0);
+          if (handle != IntPtr.Zero)
+            notificationHandles.Add(handle);
+        } finally {
+          Marshal.FreeHGlobal(buffer);
+        }
+      }
     }
 
     /// <summary>
     /// Unregisters the window for device notifications
     /// </summary>
     public static void UnregisterDeviceNotification() {
-      UnregisterDeviceNotification(notificationHandle);
+      foreach (IntPtr handle in notificationHandles)
+        UnregisterDeviceNotification(handle);
+      notificationHandles.Clear();
+    }
+
+    /// <summary>
+    /// Tells which hardware a WM_DEVICECHANGE arrival or removal message
+    /// concerns, from the DEV_BROADCAST_HDR its lParam points to.
+    /// </summary>
+    public static DeviceKind GetDeviceKind(IntPtr lParam) {
+      if (lParam == IntPtr.Zero)
+        return DeviceKind.None;
+      int deviceType = Marshal.ReadInt32(lParam, 4);
+      // Volume messages are broadcast to all top-level windows, unregistered
+      if (deviceType == DbtDevtypVolume)
+        return DeviceKind.Storage;
+      if (deviceType != DbtDevtypDeviceinterface)
+        return DeviceKind.None;
+      Guid classGuid = Marshal.PtrToStructure<DevBroadcastDeviceinterface>(lParam).ClassGuid;
+      if (classGuid == GuidDevinterfaceDisk || classGuid == GuidDevinterfaceVolume)
+        return DeviceKind.Storage;
+      if (classGuid == GuidDevinterfaceNet)
+        return DeviceKind.Network;
+      return DeviceKind.None;
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
