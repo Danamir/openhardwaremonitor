@@ -522,8 +522,11 @@ namespace OpenHardwareMonitor.GUI
             // Make sure the settings are saved when the user logs off
             Microsoft.Win32.SystemEvents.SessionEnded += delegate
             {
-                computer.Close();
-                SaveConfiguration();
+                lock (updateLock)
+                {
+                    computer.Close();
+                    SaveConfiguration();
+                }
                 if (runWebServer.Value)
                 {
                     server.StopHttpListener();
@@ -889,12 +892,34 @@ namespace OpenHardwareMonitor.GUI
 
         private int delayCount = 0;
 
+        // The settings and the history are saved periodically, to recover
+        // them after a crash, and after a line customization. A save takes
+        // ~150 ms for a day of history (~4 MB), on the update thread.
+        private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromMinutes(10);
+        private DateTime nextAutoSave = DateTime.UtcNow + AutoSaveInterval;
+        private bool saveRequested;
+        // the sensor updates, the periodic saves and the final save are
+        // never concurrent
+        private readonly object updateLock = new object();
+
         private async void timer_Tick(object sender, EventArgs e)
         {
+            bool save = saveRequested || DateTime.UtcNow >= nextAutoSave;
+            if (save)
+            {
+                saveRequested = false;
+                nextAutoSave = DateTime.UtcNow + AutoSaveInterval;
+                StoreUiSettings();
+            }
 
             //computer.Accept(updateVisitor); //720ms gui freeze 
             await Task.Run(() => {
-                computer.Accept(updateVisitor);
+                lock (updateLock)
+                {
+                    computer.Accept(updateVisitor);
+                    if (save)
+                        SaveInBackground();
+                }
             });  
             treeView.Invalidate();
             plotPanel.UpdatePlot();
@@ -910,11 +935,31 @@ namespace OpenHardwareMonitor.GUI
                 delayCount++;
         }
 
+        // on the update thread, between two updates
+        private void SaveInBackground()
+        {
+            try
+            {
+                computer.SaveSensorValues(() => WriteSettings(false));
+            }
+            catch (Exception ex)
+            {
+                Logging.LogError(ex, "Saving the settings failed");
+            }
+        }
+
         private void SaveConfiguration()
         {
             if (settings == null)
                 return;
 
+            StoreUiSettings();
+            WriteSettings(true);
+        }
+
+        // the settings only kept by the controls (on the UI thread)
+        private void StoreUiSettings()
+        {
             if (plotPanel != null)
             {
                 plotPanel.SetCurrentSettings();
@@ -931,7 +976,11 @@ namespace OpenHardwareMonitor.GUI
                     this.basicSettings.SetValue("listenerPort", server.ListenerPort);
                 }
             }
+        }
 
+        // showErrors: in a message box, otherwise only logged (periodic save)
+        private void WriteSettings(bool showErrors)
+        {
             string basicFileName = Path.ChangeExtension(
                 System.Windows.Forms.Application.ExecutablePath, ".settings");
             try
@@ -941,17 +990,15 @@ namespace OpenHardwareMonitor.GUI
                     basicSettings.Save(basicFileName);
                 }
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                MessageBox.Show("Access to the path '" + basicFileName + "' is denied. " +
-                                "The current basic settings could not be saved.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowSaveError(showErrors, ex, "Access to the path '" + basicFileName + "' is denied. " +
+                    "The current basic settings could not be saved.");
             }
-            catch (IOException)
+            catch (IOException ex)
             {
-                MessageBox.Show("The path '" + basicFileName + "' is not writeable. " +
-                                "The current basic settings could not be saved.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowSaveError(showErrors, ex, "The path '" + basicFileName + "' is not writeable. " +
+                    "The current basic settings could not be saved.");
             }
 
             string fileName = Path.ChangeExtension(
@@ -963,18 +1010,24 @@ namespace OpenHardwareMonitor.GUI
                     settings.Save(fileName);
                 }
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                MessageBox.Show("Access to the path '" + fileName + "' is denied. " +
-                                "The current settings could not be saved.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowSaveError(showErrors, ex, "Access to the path '" + fileName + "' is denied. " +
+                    "The current settings could not be saved.");
             }
-            catch (IOException)
+            catch (IOException ex)
             {
-                MessageBox.Show("The path '" + fileName + "' is not writeable. " +
-                                "The current settings could not be saved.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowSaveError(showErrors, ex, "The path '" + fileName + "' is not writeable. " +
+                    "The current settings could not be saved.");
             }
+        }
+
+        private static void ShowSaveError(bool showErrors, Exception ex, string message)
+        {
+            if (showErrors)
+                MessageBox.Show(message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            else
+                Logging.LogError(ex, message);
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -1079,8 +1132,11 @@ namespace OpenHardwareMonitor.GUI
             Visible = false;
             systemTray.IsMainIconEnabled = false;
             timer.Enabled = false;
-            computer.Close();
-            SaveConfiguration();
+            lock (updateLock)
+            {
+                computer.Close();
+                SaveConfiguration();
+            }
             if (runWebServer.Value)
             {
                 server.StopHttpListener();
@@ -1165,7 +1221,10 @@ namespace OpenHardwareMonitor.GUI
                                     node.Text + "\" to their defaults?",
                                     "Reset Line", MessageBoxButtons.YesNo,
                                     MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                            {
                                 node.ResetLine();
+                                saveRequested = true;
+                            }
                         };
                         treeContextMenu.Items.Add(item);
                     }
@@ -1402,6 +1461,10 @@ namespace OpenHardwareMonitor.GUI
                 {
                     node.LineAveraging = initialAveraging;
                     node.SetLines(initialDisplay, initialColor, initialLines);
+                }
+                else
+                {
+                    saveRequested = true;
                 }
             }
         }

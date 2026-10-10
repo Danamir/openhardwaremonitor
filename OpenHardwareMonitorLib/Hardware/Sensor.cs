@@ -78,9 +78,16 @@ namespace OpenHardwareMonitor.Hardware {
       };
     }
 
-    private void SetSensorValuesToSettings() {
+    internal void SetSensorValuesToSettings() {
       SetValuesToSettings(values, "values");
       SetValuesToSettings(recentValues, "recentValues");
+    }
+
+    // after a periodic save (Computer.SaveSensorValues): the history stays in
+    // memory only once, in the rings
+    internal void RemoveSensorValuesFromSettings() {
+      settings.Remove(new Identifier(Identifier, "values").ToString());
+      settings.Remove(new Identifier(Identifier, "recentValues").ToString());
     }
 
     private void SetValuesToSettings(RingCollection<SensorValue> ring,

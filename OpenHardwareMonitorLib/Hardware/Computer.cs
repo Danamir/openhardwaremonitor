@@ -559,6 +559,45 @@ public class Computer : IComputer
         }
     }
 
+    /// <summary>
+    /// Puts the history of all sensors into the settings, calls save (which
+    /// writes the settings), then removes the history from the settings again
+    /// to keep the memory usage low. Not to be called during a sensor update.
+    /// </summary>
+    public void SaveSensorValues(Action save)
+    {
+        lock (m_groupsLock)
+        {
+            List<Sensor> sensors = new List<Sensor>();
+            foreach (IGroup group in m_groups)
+            foreach (IHardware hardware in group.Hardware)
+                CollectSensors(hardware, sensors);
+
+            foreach (Sensor sensor in sensors)
+                sensor.SetSensorValuesToSettings();
+            try
+            {
+                save();
+            }
+            finally
+            {
+                foreach (Sensor sensor in sensors)
+                    sensor.RemoveSensorValuesFromSettings();
+            }
+        }
+    }
+
+    private static void CollectSensors(IHardware hardware, List<Sensor> sensors)
+    {
+        foreach (ISensor sensor in hardware.Sensors)
+        {
+            if (sensor is Sensor s)
+                sensors.Add(s);
+        }
+        foreach (IHardware subHardware in hardware.SubHardware)
+            CollectSensors(subHardware, sensors);
+    }
+
     private class Settings : ISettings
     {
 

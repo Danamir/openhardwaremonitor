@@ -26,6 +26,7 @@ This fork is tuned for one person's daily use, mostly around the **sensor plot**
 ### Application
 
 - **Faster startup:** the window shows in about 1 s instead of about 10 s with a day of history.
+- **Crash-safe history.** The settings and the sensor history are saved every 10 minutes, in the background, and the line settings as soon as the customization is confirmed. Before, they were only saved on exit, so a crash lost them all.
 
 ## Fixes
 
